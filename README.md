@@ -197,11 +197,11 @@ artifacts/apk/neon-apex-release.apk
 artifacts/aab/neon-apex-release.aab
 ```
 
-当前已部署产物（2026-08-11，`v1.4.2 (11)`）：
+当前已部署产物（2026-08-11，`v1.5.0 (12)`）：
 
 ```text
-APK SHA-256  0495ae7d877c9012a190535a9b8d1a1f6c28e7457e6cdc5ed7e3592dc74c6f5c
-AAB SHA-256  4c64e465f7ec6e13643203b5ddfecf5b0e950239c49f006180fd48a51f249e85
+APK SHA-256  07e1f8619c2dcdfa30f9e292ee165f3b8a7cbe0390eba8b984dac2b143d709c6
+AAB SHA-256  b19b907fb549a47a5d523f23e2e594ca9c9e61756053d0570a9279305e400a89
 证书 SHA-256 165b461910953729306cf12464a993ea300d44edb553f0f79191e44d72b43b6c
 ```
 
