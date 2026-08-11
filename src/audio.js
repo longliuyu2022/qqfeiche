@@ -10,12 +10,23 @@ export class RaceAudio {
     this.ready = false;
     this.volume = 0.7;
     this.muted = false;
+    this.voiceGain = null;
+    this.voiceEnabled = true;
+    this.voiceBaseUrl = '/assets/audio/voice/';
+    this.voiceManifest = null;
+    this.voiceBuffers = new Map();
+    this.voiceData = new Map();
+    this.voiceLoading = new Set();
+    this.voiceFailed = new Set();
+    this.voicePlaying = new Map();
+    this._voiceReady = false;
   }
 
   async start() {
     if (!this.context) this.setup();
     if (this.context.state === 'suspended') await this.context.resume();
     this.ready = true;
+    this._decodePendingVoiceData();
   }
 
   setup() {
@@ -82,6 +93,7 @@ export class RaceAudio {
   }
 
   _applyMasterGain() {
+    this._applyVoiceGain();
     if (!this.master) return;
     const value = this.muted ? 0 : 0.32 * this.volume;
     if (this.context) this.master.gain.setTargetAtTime(value, this.context.currentTime, 0.025);
@@ -105,6 +117,126 @@ export class RaceAudio {
 
   countdown(final = false) {
     this.tone(final ? 820 : 420, final ? 0.28 : 0.11, final ? 0.16 : 0.1, 'square');
+  }
+
+  get voiceReady() {
+    return this._voiceReady;
+  }
+
+  async loadVoiceBank(baseUrl = '/assets/audio/voice/') {
+    try {
+      const base = String(baseUrl || '/assets/audio/voice/');
+      this.voiceBaseUrl = base.endsWith('/') ? base : `${base}/`;
+      const response = await fetch(`${this.voiceBaseUrl}manifest.json`);
+      if (!response.ok) return false;
+      const manifest = await response.json();
+      const clips = manifest && manifest.clips && typeof manifest.clips === 'object' ? manifest.clips : null;
+      if (!clips) return false;
+      this.voiceManifest = clips;
+      this._voiceReady = true;
+      for (const name of Object.keys(clips)) this._loadVoiceClip(name);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  voice(name, { volume = 1 } = {}) {
+    if (!this.voiceEnabled || !this._voiceReady || !this.ready || !this.context) return false;
+    const buffer = this.voiceBuffers.get(name);
+    if (!buffer) {
+      this._loadVoiceClip(name);
+      return false;
+    }
+    this._ensureVoiceGain();
+    if (!this.voiceGain) return false;
+    const now = this.context.currentTime;
+    this._stopVoicePlayback(name, now);
+    const source = this.context.createBufferSource();
+    source.buffer = buffer;
+    const gain = this.context.createGain();
+    gain.gain.value = Math.min(2, Math.max(0, Number(volume) || 0));
+    source.connect(gain).connect(this.voiceGain);
+    const active = { source, gain };
+    this.voicePlaying.set(name, active);
+    source.onended = () => {
+      if (this.voicePlaying.get(name) === active) this.voicePlaying.delete(name);
+      gain.disconnect();
+    };
+    source.start(now);
+    return true;
+  }
+
+  setVoiceEnabled(enabled = true) {
+    this.voiceEnabled = Boolean(enabled);
+    this._applyVoiceGain();
+    if (!this.voiceEnabled && this.context) {
+      const now = this.context.currentTime;
+      for (const name of [...this.voicePlaying.keys()]) this._stopVoicePlayback(name, now);
+    }
+    return this;
+  }
+
+  _stopVoicePlayback(name, now) {
+    const active = this.voicePlaying.get(name);
+    if (!active) return;
+    active.gain.gain.setTargetAtTime(0, now, 0.012);
+    try {
+      active.source.stop(now + 0.06);
+    } catch (error) {
+      // already stopped
+    }
+    this.voicePlaying.delete(name);
+  }
+
+  _ensureVoiceGain() {
+    if (!this.context || this.voiceGain) return;
+    this.voiceGain = this.context.createGain();
+    this.voiceGain.gain.value = this.muted || !this.voiceEnabled ? 0 : 0.9 * this.volume;
+    this.voiceGain.connect(this.context.destination);
+  }
+
+  _applyVoiceGain() {
+    if (!this.voiceGain || !this.context) return;
+    const value = this.muted || !this.voiceEnabled ? 0 : 0.9 * this.volume;
+    this.voiceGain.gain.setTargetAtTime(value, this.context.currentTime, 0.02);
+  }
+
+  _decodePendingVoiceData() {
+    if (!this.context || !this.voiceData.size) return;
+    for (const name of [...this.voiceData.keys()]) this._loadVoiceClip(name);
+  }
+
+  async _loadVoiceClip(name) {
+    if (this.voiceBuffers.has(name)) return this.voiceBuffers.get(name);
+    const entry = this.voiceManifest ? this.voiceManifest[name] : null;
+    if (!entry || !entry.file || this.voiceFailed.has(name) || this.voiceLoading.has(name)) return null;
+    this.voiceLoading.add(name);
+    try {
+      if (!this.voiceData.has(name)) {
+        const response = await fetch(this.voiceBaseUrl + entry.file);
+        if (!response.ok) {
+          this.voiceFailed.add(name);
+          return null;
+        }
+        this.voiceData.set(name, await response.arrayBuffer());
+      }
+      if (!this.context) return null;
+      try {
+        const buffer = await this.context.decodeAudioData(this.voiceData.get(name).slice(0));
+        this.voiceBuffers.set(name, buffer);
+        this.voiceData.delete(name);
+        return buffer;
+      } catch (error) {
+        this.voiceFailed.add(name);
+        this.voiceData.delete(name);
+        return null;
+      }
+    } catch (error) {
+      return null;
+    } finally {
+      this.voiceLoading.delete(name);
+    }
   }
 
   static distortionCurve(amount) {

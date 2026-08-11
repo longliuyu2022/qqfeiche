@@ -143,6 +143,92 @@ assert.equal(race.totalLaps, 1);
 assert.equal(race.state.entrantCount, 1);
 assert.equal(race.getStandings().length, 1);
 
+const boostCar = new ArcadeVehicle({ driftMinSpeed: 7 });
+boostCar.startRace();
+let miniBoosts = 0;
+let doubleBoosts = 0;
+boostCar.on('miniBoost', () => { miniBoosts += 1; });
+boostCar.on('doubleBoost', () => { doubleBoosts += 1; });
+for (let step = 0; step < 180; step += 1) boostCar.update(1 / 60, { throttle: 1 });
+for (let step = 0; step < 60; step += 1) {
+  boostCar.update(1 / 60, { throttle: 1, steer: 0.6, drift: 1 });
+}
+assert.ok(boostCar.state.chargeLevel >= 1, 'a sustained drift should raise the spark charge tier');
+boostCar.update(1 / 60, { throttle: 1, steer: 0, drift: 0 });
+assert.equal(miniBoosts, 1, 'releasing a scored drift should fire an instant mini boost');
+assert.ok(boostCar.state.miniBoostTime > 0, 'the mini boost should stay active after the drift release');
+assert.equal(boostCar.state.miniBoostLevel, 1);
+assert.equal(boostCar.state.boostChain, 1);
+boostCar.nitro = 60;
+boostCar.update(1 / 60, { throttle: 1, nitro: 1 });
+assert.equal(doubleBoosts, 1, 'firing nitro during a mini boost should upgrade it to a double boost');
+assert.equal(boostCar.state.miniBoostLevel, 2);
+for (let step = 0; step < 40; step += 1) {
+  boostCar.update(1 / 60, { throttle: 1, steer: -0.6, drift: 1 });
+}
+boostCar.update(1 / 60, { throttle: 1, steer: 0, drift: 0 });
+assert.equal(boostCar.state.boostChain, 2, 'a second drift inside the combo window should extend the boost chain');
+
+const launchCar = new ArcadeVehicle({ trackCurve: curve, trackWidth: 16 });
+launchCar.startRace();
+let launchEvents = 0;
+launchCar.on('launchBoost', () => { launchEvents += 1; });
+assert.equal(launchCar.primeLaunchBoost('perfect'), true);
+assert.equal(launchEvents, 1);
+assert.equal(launchCar.state.launchQuality, 'perfect');
+assert.ok(launchCar.speed >= 8.5, 'a perfect launch should add an immediate speed impulse');
+assert.equal(launchCar.state.miniBoostLevel, 2, 'a perfect launch should grant a double-grade boost');
+assert.equal(launchCar.primeLaunchBoost('invalid'), false);
+
+function chaseCenterline(vehicle) {
+  const sample = vehicle.sampleTrack();
+  if (!sample) return 0;
+  const aheadX = sample.point.x + sample.tangent.x * 10 - vehicle.position.x;
+  const aheadZ = sample.point.z + sample.tangent.z * 10 - vehicle.position.z;
+  const desired = Math.atan2(aheadX, aheadZ);
+  const error = ((desired - vehicle.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+  return THREE.MathUtils.clamp(error * 2.5, -1, 1);
+}
+
+const padCar = new ArcadeVehicle({ trackCurve: curve, trackWidth: 16 });
+padCar.startRace();
+padCar.setTrackFeatures({ pads: [{ id: 'pad-1', start: 0.02, end: 0.05, halfWidth: 6 }] });
+let padBoosts = 0;
+let padSpeedJump = 0;
+let previousPadSpeed = 0;
+padCar.on('padBoost', ({ state }) => {
+  padBoosts += 1;
+  padSpeedJump = state.speedMps - previousPadSpeed;
+});
+for (let step = 0; step < 420 && padCar.state.trackProgress < 0.09; step += 1) {
+  previousPadSpeed = padCar.state.speedMps;
+  padCar.update(1 / 60, { throttle: 1, steer: chaseCenterline(padCar) });
+}
+assert.equal(padBoosts, 1, 'driving across a boost pad should trigger it exactly once');
+assert.ok(padSpeedJump > 3, 'a boost pad should add an immediate speed impulse');
+
+const rampCar = new ArcadeVehicle({ trackCurve: curve, trackWidth: 16 });
+rampCar.startRace();
+rampCar.setTrackFeatures({ ramps: [{ id: 'ramp-1', start: 0.12, end: 0.15, height: 2.6, halfWidth: 6 }] });
+let rampLaunches = 0;
+let rampLandings = 0;
+let maxAirHeight = 0;
+rampCar.on('rampLaunch', () => { rampLaunches += 1; });
+rampCar.on('landingBoost', () => { rampLandings += 1; });
+for (let step = 0; step < 1200 && rampLandings === 0; step += 1) {
+  rampCar.update(1 / 60, { throttle: 1, steer: chaseCenterline(rampCar) });
+  if (rampCar.state.airborne) {
+    const rampSample = rampCar.sampleTrack();
+    if (rampSample) maxAirHeight = Math.max(maxAirHeight, rampCar.position.y - rampSample.point.y);
+  }
+}
+assert.equal(rampLaunches, 1, 'crossing the ramp lip at speed should launch the car');
+assert.ok(maxAirHeight > 2, 'the launch should climb above the ramp lip');
+assert.equal(rampLandings, 1, 'landing with throttle held should grant a landing boost');
+assert.ok(rampCar.state.miniBoostTime > 0, 'the landing boost should be active right after touchdown');
+assert.equal(rampCar.state.airborne, false);
+assert.equal(rampCar.state.shortcutStrikes, 0, 'flying over the ramp should not be flagged as a shortcut');
+
 console.log(JSON.stringify({
   checkpoints: checkpointEvents,
   laps: lapEvents,
@@ -154,4 +240,10 @@ console.log(JSON.stringify({
   aiOvertakes: overtakes,
   aiDefenses: defenses,
   resultPosition,
+  miniBoosts,
+  doubleBoosts,
+  boostChain: boostCar.state.boostChain,
+  padBoosts,
+  rampLaunches,
+  rampLandings,
 }));

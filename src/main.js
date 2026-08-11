@@ -17,13 +17,27 @@ import { createDetailedHeroCar } from './vehicle-assets.js';
 import { ArcadeVehicle } from './driving.js';
 import { RaceSystem } from './race-system.js';
 import { RaceAudio } from './audio.js';
+import { createMusicSystem } from './music.js';
 import { createRuntimeMonitor } from './telemetry.js';
 import { createSpeedPostProcess } from './speed-postprocess.js';
-import { loadRaceRecords, recordRaceResult } from './race-records.js';
+import { loadRaceRecords, recordRaceResult, saveGhost, loadGhost } from './race-records.js';
 import { loadPreferences, savePreferences } from './preferences.js';
 import { RACE_MODES } from './race-modes.js';
 import { TRACK_CATALOG, normalizeTrackId } from './track-catalog.js';
 import { ItemRaceSystem, ITEM_DEFINITIONS } from './item-race.js';
+import { computeTrackFeatures, featureZonesForPhysics } from './track-features.js';
+import { buildTrackFeatureMeshes } from './track-feature-meshes.js';
+import { createDriftEffects } from './drift-effects.js';
+import { DEFAULT_CAR_ID, getCarById, applyCarPhysics } from './car-catalog.js';
+import { createHeroCarVariant } from './procedural-vehicle.js';
+import { createGhostPlayer, createGhostRecorder, serializeGhost, deserializeGhost } from './ghost.js';
+import {
+  applyRaceResult as applyRankResult,
+  formatRank,
+  getRankTier,
+  loadRankState,
+  saveRankState,
+} from './ranked.js';
 
 let preferences = loadPreferences();
 const activeTrackId = normalizeTrackId(window.__NEON_APEX_TRACK__ || preferences.lastTrack);
@@ -110,18 +124,25 @@ composer.addPass(speedPost.pass);
 composer.addPass(new OutputPass());
 
 const world = activeTrackRuntime.createWorld(scene, { qualityTier });
-const hero = await createDetailedHeroCar({
-  maxAnisotropy: renderer.capabilities.getMaxAnisotropy(),
-  onError: (error, url) => runtimeMonitor.assetFailure(url, error),
-  onProgress: (event) => {
-    if (!event.total) return;
-    const label = document.querySelector('.loading-screen small');
-    if (label) label.textContent = `${activeTrack.loading} ${Math.round((event.loaded / event.total) * 100)}%`;
-  },
-});
+const trackFeatures = computeTrackFeatures(trackCurve, { trackId: activeTrackId, roadWidth: 16 });
+const featureZones = featureZonesForPhysics(trackFeatures);
+const featureMeshes = buildTrackFeatureMeshes(trackFeatures, { theme: activeTrackId });
+scene.add(featureMeshes);
+const selectedCar = getCarById(preferences.carId);
+const hero = selectedCar.id === DEFAULT_CAR_ID
+  ? await createDetailedHeroCar({
+    maxAnisotropy: renderer.capabilities.getMaxAnisotropy(),
+    onError: (error, url) => runtimeMonitor.assetFailure(url, error),
+    onProgress: (event) => {
+      if (!event.total) return;
+      const label = document.querySelector('.loading-screen small');
+      if (label) label.textContent = `${activeTrack.loading} ${Math.round((event.loaded / event.total) * 100)}%`;
+    },
+  })
+  : createHeroCarVariant(selectedCar);
 scene.add(hero);
 
-const vehicle = new ArcadeVehicle({
+const vehicle = new ArcadeVehicle(applyCarPhysics({
   object: hero,
   trackCurve,
   trackWidth: 16,
@@ -131,7 +152,15 @@ const vehicle = new ArcadeVehicle({
   maxSpeed: 82,
   acceleration: 34,
   nitroSpeedMultiplier: 1.3,
-});
+  steeringRate: 2.25,
+  normalGrip: 10.5,
+  nitroAcceleration: 25,
+  nitroDrainRate: 25,
+  driftNitroRate: 18,
+  miniBoostAcceleration: 30,
+  miniBoostDuration: 0.62,
+}, selectedCar));
+vehicle.setTrackFeatures(featureZones);
 vehicle.bindKeyboard(window);
 vehicle.bindTouchControls({
   left: '[data-control="left"]',
@@ -170,7 +199,7 @@ const rivals = rivalColors.map((color, index) => {
     object,
     progress: startT - 0.0038 * (index + 1),
     totalProgress: startT - 0.0038 * (index + 1),
-    speed: 59 + index * 1.9,
+    speed: 62 + index * 1.9,
     lane: ((index % 2) * 2 - 1) * (1.7 + Math.floor(index / 2) * 0.35),
     wheelPhase: Math.random() * Math.PI * 2,
   };
@@ -221,6 +250,18 @@ const windStreaks = createWindStreaks(camera);
 const audio = new RaceAudio();
 audio.setVolume(preferences.masterVolume);
 audio.setMuted(!preferences.soundEnabled);
+audio.setVoiceEnabled(preferences.voiceEnabled);
+audio.loadVoiceBank();
+const music = createMusicSystem(audio);
+music.setVolume(preferences.musicVolume);
+music.setEnabled(preferences.musicEnabled);
+const driftEffects = createDriftEffects({ scene });
+driftEffects.setQuality(qualityTier === 'balanced' ? 'low' : qualityTier === 'ultra' ? 'high' : 'medium');
+const ghostPlayer = createGhostPlayer();
+let ghostRecorder = null;
+let ghostCar = null;
+let ghostData = null;
+let rankState = loadRankState();
 let raceRecords = loadRaceRecords();
 const clock = new THREE.Clock();
 const cameraTarget = new THREE.Vector3();
@@ -255,6 +296,26 @@ let previousForwardSpeed = 0;
 let waitingForOnlineStart = isOnline;
 let lastNetworkSendAt = 0;
 let networkSequence = 0;
+let fovRush = 0;
+let launchThrottleAt = null;
+let lastPlayerPosition = null;
+let overtakeCooldown = 0;
+const driftFrame = {
+  position: null,
+  heading: 0,
+  drifting: false,
+  driftIntensity: 0,
+  chargeLevel: 0,
+  boosting: false,
+  miniBoostActive: false,
+  airborne: false,
+  speedKph: 0,
+  groundY: 0,
+};
+
+function announce(name, fallback) {
+  if (!audio.voice(name)) fallback?.();
+}
 
 function collectUi() {
   const ids = [
@@ -262,11 +323,13 @@ function collectUi() {
     'checkpoint', 'driftScore', 'combo', 'comboBlock', 'countdown', 'callout', 'loading',
     'pauseMenu', 'resultMenu', 'resultTitle', 'resultPosition', 'resultTime', 'bestLap', 'resultScore',
     'recordStatus', 'personalBest',
-    'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins',
+    'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeRank',
     'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'settingsMenu',
     'soundEnabled', 'masterVolume', 'volumeValue', 'qualitySetting',
+    'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'ghostEnabled',
     'vibrationEnabled', 'cameraShakeEnabled', 'hudTrackName', 'raceFeedTitle', 'raceFeedMeta',
     'itemHud', 'itemUse', 'itemIcon', 'itemName',
+    'resultRankRow', 'resultRankLabel', 'resultRankDelta',
   ];
   return Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
 }
@@ -612,15 +675,23 @@ function updateCarVisuals(dt) {
     poseRoot.position.y = THREE.MathUtils.damp(poseRoot.position.y, suspensionOffset, 10, dt);
   }
 
+  const miniActive = vehicle.state.miniBoostTime > 0;
+  const doubleActive = miniActive && vehicle.state.miniBoostLevel >= 2;
+  const flameActive = vehicle.boosting || miniActive;
+  const flameScale = doubleActive ? 1.42 : vehicle.boosting ? 1.16 : miniActive ? 0.92 : 1;
   (hero.userData.nitroFlames ?? []).forEach((flame, index) => {
-    flame.visible = vehicle.boosting;
+    flame.visible = flameActive;
     const pulse = 0.82
       + Math.sin(elapsed * 37 + index * 1.7) * 0.13
       + Math.sin(elapsed * 61 + index * 2.4) * 0.06;
-    flame.scale.set(0.72 + pulse * 0.32, 0.7 + pulse * 0.24, 1.05 + pulse * 1.28);
+    flame.scale.set(
+      (0.72 + pulse * 0.32) * flameScale,
+      (0.7 + pulse * 0.24) * flameScale,
+      (1.05 + pulse * 1.28) * flameScale * (doubleActive ? 1.3 : 1),
+    );
   });
   if (hero.userData.underglow?.material) {
-    hero.userData.underglow.material.opacity = vehicle.boosting ? 0.27 : 0.12 + speedPose * 0.035;
+    hero.userData.underglow.material.opacity = flameActive ? 0.27 : 0.12 + speedPose * 0.035;
   }
   const braking = vehicle.input.brake > 0.05;
   (hero.userData.brakeLights ?? []).forEach((light) => {
@@ -639,7 +710,7 @@ function updateCarVisuals(dt) {
   }
   const wheelShadow = hero.userData.wheelContactShadows?.children?.[0]?.material;
   if (wheelShadow) wheelShadow.opacity = 0.55 + speedPose * 0.08;
-  document.body.classList.toggle('boosting', vehicle.boosting);
+  document.body.classList.toggle('boosting', flameActive);
 }
 
 function updateRivals(dt) {
@@ -722,18 +793,23 @@ function updateCamera(dt) {
   vehicle.getForwardVector(forward);
   vehicle.getRightVector(right);
   const speedFactor = THREE.MathUtils.smoothstep(vehicle.speedKph, 50, 330);
+  const miniActive = vehicle.state.miniBoostTime > 0;
+  const doubleActive = miniActive && vehicle.state.miniBoostLevel >= 2;
+  const anyBoost = vehicle.boosting || miniActive;
+  fovRush = Math.max(0, fovRush - dt * 1.9);
+  const rushFov = fovRush * 6 + (doubleActive ? 3 : 0);
   const portrait = camera.aspect < 0.8;
   const compactLandscape = camera.aspect > 1.25 && innerHeight < 500;
   const targetFov = portrait
-    ? 52 + speedFactor * 7 + (vehicle.boosting ? 4 : 0)
+    ? 52 + speedFactor * 7 + (anyBoost ? 4 : 0) + rushFov * 0.8
     : compactLandscape
-      ? 52.5 + speedFactor * 8.5 + (vehicle.boosting ? 4 : 0)
-      : 54 + speedFactor * 10 + (vehicle.boosting ? 5 : 0);
+      ? 52.5 + speedFactor * 8.5 + (anyBoost ? 4 : 0) + rushFov * 0.9
+      : 54 + speedFactor * 10 + (anyBoost ? 5 : 0) + rushFov;
   const desiredDistance = portrait
-    ? 10.4 + speedFactor * 0.35 + (vehicle.boosting ? 0.12 : 0)
+    ? 10.4 + speedFactor * 0.35 + (anyBoost ? 0.12 : 0)
     : compactLandscape
-      ? 6.65 + speedFactor * 0.3 + (vehicle.boosting ? 0.1 : 0)
-      : 7.8 + speedFactor * 0.42 + (vehicle.boosting ? 0.15 : 0);
+      ? 6.65 + speedFactor * 0.3 + (anyBoost ? 0.1 : 0)
+      : 7.8 + speedFactor * 0.42 + (anyBoost ? 0.15 : 0);
   const minShare = portrait ? 0.24 : 0.14;
   const vehicleWidth = hero.userData.dimensions?.x ?? 2.4;
   const maxDistance = (vehicleWidth * 0.94) / (
@@ -761,16 +837,30 @@ function updateCamera(dt) {
   camera.lookAt(cameraTarget);
   camera.rotation.z -= vehicle.steering * speedFactor * 0.018;
   const shake = preferences.cameraShake
-    ? speedFactor ** 2 * 0.012 + (vehicle.boosting ? 0.024 : 0) + vehicle.state.collisionImpact * 0.14
+    ? speedFactor ** 2 * 0.012
+      + (vehicle.boosting ? 0.024 : 0)
+      + (doubleActive ? 0.014 : 0)
+      + vehicle.state.collisionImpact * 0.14
     : 0;
   cameraShakeOffset.copy(right).multiplyScalar(Math.sin(elapsed * 43) * shake);
   cameraShakeOffset.y = Math.sin(elapsed * 59) * shake * 0.55;
   camera.position.add(cameraShakeOffset);
-  camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 4, dt);
+  camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, targetFov > camera.fov ? 8.5 : 3.4, dt);
   camera.updateProjectionMatrix();
   const baseBloom = activeTrack.bloomStrength;
-  bloom.strength = THREE.MathUtils.damp(bloom.strength, vehicle.boosting ? baseBloom + 0.22 : baseBloom, 4, dt);
-  speedPost.update({ speedKph: vehicle.speedKph, boosting: vehicle.boosting, aspect: camera.aspect, delta: dt });
+  bloom.strength = THREE.MathUtils.damp(
+    bloom.strength,
+    anyBoost ? baseBloom + (doubleActive ? 0.3 : 0.22) : baseBloom,
+    4,
+    dt,
+  );
+  speedPost.update({
+    speedKph: vehicle.speedKph,
+    boosting: anyBoost,
+    rush: Math.min(1, fovRush + (anyBoost ? 0.18 : 0)),
+    aspect: camera.aspect,
+    delta: dt,
+  });
 }
 
 function formatTime(seconds) {
@@ -806,6 +896,80 @@ function setRivalsVisible(count = 0) {
   rivals.forEach((rival, index) => { rival.object.visible = index < count; });
 }
 
+function cloneGhostMaterial(material) {
+  const clone = material.clone();
+  clone.transparent = true;
+  clone.opacity = Math.min(0.38, clone.opacity || 1);
+  clone.depthWrite = false;
+  return clone;
+}
+
+function ensureGhostCar() {
+  if (ghostCar) return ghostCar;
+  ghostCar = createRivalCar(0x9fe8ff);
+  ghostCar.traverse((node) => {
+    if (node.isLight) node.visible = false;
+    node.castShadow = false;
+    node.receiveShadow = false;
+    if (Array.isArray(node.material)) node.material = node.material.map(cloneGhostMaterial);
+    else if (node.material) node.material = cloneGhostMaterial(node.material);
+  });
+  if (ghostCar.userData.underglow) ghostCar.userData.underglow.visible = false;
+  ghostCar.visible = false;
+  scene.add(ghostCar);
+  return ghostCar;
+}
+
+function stopGhost() {
+  ghostRecorder?.cancel();
+  ghostRecorder = null;
+  ghostPlayer.stop();
+  ghostData = null;
+  if (ghostCar) ghostCar.visible = false;
+}
+
+function updateGhost() {
+  if (activeMode !== 'timeTrial' || isOnline) return;
+  if (raceStarted && ghostRecorder?.recording && !vehicle.state.finished) {
+    ghostRecorder.sample(vehicle.state.raceTime, {
+      x: vehicle.position.x,
+      y: vehicle.position.y,
+      z: vehicle.position.z,
+      heading: vehicle.heading,
+      drifting: vehicle.drifting,
+    });
+  }
+  if (!ghostPlayer.active || !ghostCar) return;
+  const frame = raceStarted ? ghostPlayer.sampleAt(vehicle.state.raceTime) : null;
+  if (!frame) {
+    ghostCar.visible = false;
+    return;
+  }
+  ghostCar.visible = true;
+  ghostCar.position.set(frame.x, frame.y, frame.z);
+  ghostCar.rotation.y = frame.heading;
+}
+
+function fillDriftFrame() {
+  driftFrame.position = vehicle.position;
+  driftFrame.heading = vehicle.heading;
+  driftFrame.drifting = vehicle.drifting;
+  driftFrame.driftIntensity = vehicle.state.driftIntensity;
+  driftFrame.chargeLevel = vehicle.state.chargeLevel;
+  driftFrame.boosting = vehicle.boosting;
+  driftFrame.miniBoostActive = vehicle.state.miniBoostTime > 0;
+  driftFrame.airborne = vehicle.state.airborne;
+  driftFrame.speedKph = vehicle.speedKph;
+  driftFrame.groundY = vehicle.position.y;
+  return driftFrame;
+}
+
+function renderRankBadge() {
+  if (!ui.homeRank) return;
+  ui.homeRank.textContent = formatRank(rankState);
+  ui.homeRank.dataset.tier = getRankTier(rankState).id;
+}
+
 function selectMode(modeId, { persist = true } = {}) {
   if (!RACE_MODES[modeId]) return;
   selectedMode = modeId;
@@ -837,6 +1001,16 @@ function prepareRace(modeId = activeMode) {
   raceSystem.configure({ totalLaps: mode.laps, rivalCount: isOnline ? 0 : mode.rivals });
   setRivalsVisible(isOnline ? 0 : mode.rivals);
   itemRace.reset({ enabled: !isOnline && activeMode === 'items' });
+  driftEffects.reset();
+  stopGhost();
+  if (activeMode === 'timeTrial' && !isOnline && preferences.ghostEnabled) {
+    const stored = loadGhost(activeTrackId);
+    ghostData = stored ? deserializeGhost(stored) : null;
+  }
+  lastPlayerPosition = null;
+  overtakeCooldown = 0;
+  launchThrottleAt = null;
+  fovRush = 0;
   document.body.dataset.raceMode = activeMode;
 }
 
@@ -845,6 +1019,12 @@ function syncSettingsUi() {
   ui.masterVolume.value = String(preferences.masterVolume);
   ui.masterVolume.disabled = !preferences.soundEnabled;
   ui.volumeValue.textContent = `${Math.round(preferences.masterVolume * 100)}%`;
+  ui.musicEnabled.checked = preferences.musicEnabled;
+  ui.musicVolume.value = String(preferences.musicVolume);
+  ui.musicVolume.disabled = !preferences.musicEnabled;
+  ui.musicVolumeValue.textContent = `${Math.round(preferences.musicVolume * 100)}%`;
+  ui.voiceEnabled.checked = preferences.voiceEnabled;
+  ui.ghostEnabled.checked = preferences.ghostEnabled;
   ui.qualitySetting.value = preferences.quality;
   ui.vibrationEnabled.checked = preferences.vibration;
   ui.cameraShakeEnabled.checked = preferences.cameraShake;
@@ -854,6 +1034,9 @@ function applyPreferences(changes) {
   preferences = savePreferences({ ...preferences, ...changes });
   audio.setVolume(preferences.masterVolume);
   audio.setMuted(!preferences.soundEnabled);
+  audio.setVoiceEnabled(preferences.voiceEnabled);
+  music.setVolume(preferences.musicVolume);
+  music.setEnabled(preferences.musicEnabled && !paused);
   qualityTier = resolveQualityTier(detectedQualityTier);
   renderer.shadowMap.enabled = qualityTier !== 'balanced';
   syncSettingsUi();
@@ -888,6 +1071,7 @@ function updateUi() {
   ui.gear.textContent = kph < 2 ? 'N' : String(Math.min(7, Math.max(1, Math.floor(kph / 48) + 1)));
   ui.tachFill.style.width = `${Math.min(100, (kph / 350) * 100)}%`;
   ui.nitroFill.style.width = `${vehicle.state.nitroNormalized * 100}%`;
+  ui.nitroFill.dataset.charge = String(vehicle.state.chargeLevel);
   ui.nitroPct.textContent = String(Math.round(vehicle.state.nitro));
   const item = itemRace.inventory ? ITEM_DEFINITIONS[itemRace.inventory] : null;
   ui.itemIcon.textContent = item?.icon ?? '?';
@@ -908,6 +1092,14 @@ function updateUi() {
   const onlineStandings = isOnline ? getOnlineStandings() : null;
   const playerPosition = onlineStandings?.find((entry) => entry.isPlayer)?.position ?? raceSystem.state.playerPosition;
   const entrantCount = onlineStandings?.length ?? raceSystem.state.entrantCount;
+  if (raceStarted && !vehicle.state.finished && entrantCount > 1) {
+    if (lastPlayerPosition !== null && playerPosition < lastPlayerPosition && overtakeCooldown <= 0) {
+      showCallout('漂亮的超越！', 1.1);
+      announce('overtake');
+      overtakeCooldown = 2.6;
+    }
+    lastPlayerPosition = playerPosition;
+  }
   ui.position.innerHTML = `${playerPosition}<small>/ ${entrantCount}</small>`;
   drawMinimap();
 }
@@ -951,6 +1143,16 @@ function drawMinimap() {
   ctx.shadowBlur = 7;
   ctx.stroke();
   ctx.shadowBlur = 0;
+  for (const pad of trackFeatures.boostPads) {
+    const mapped = mapPosition(pad.point);
+    ctx.fillStyle = 'rgba(74, 255, 226, .9)';
+    ctx.fillRect(mapped.x - 1.6, mapped.y - 1.6, 3.2, 3.2);
+  }
+  for (const ramp of trackFeatures.ramps) {
+    const mapped = mapPosition(ramp.point);
+    ctx.fillStyle = '#ffb84d';
+    ctx.beginPath(); ctx.arc(mapped.x, mapped.y, 2.6, 0, Math.PI * 2); ctx.fill();
+  }
   rivals.filter((rival) => rival.object.visible).forEach((rival) => {
     const mapped = mapPosition(trackCurve.getPointAt((rival.progress + 1) % 1));
     ctx.fillStyle = '#ff596c';
@@ -972,6 +1174,11 @@ function drawMinimap() {
 function updateCountdown(dt) {
   if (homeVisible || waitingForOnlineStart || raceStarted || paused) return;
   countdown -= dt;
+  if (vehicle.input.throttle > 0.5) {
+    if (launchThrottleAt === null) launchThrottleAt = countdown;
+  } else {
+    launchThrottleAt = null;
+  }
   const value = Math.ceil(countdown);
   if (value > 0) {
     const nextText = String(value);
@@ -980,17 +1187,35 @@ function updateCountdown(dt) {
       ui.countdown.classList.remove('pulse');
       void ui.countdown.offsetWidth;
       ui.countdown.classList.add('pulse');
-      audio.countdown(false);
+      if (!audio.voice(`countdown_${value}`)) audio.countdown(false);
     }
   } else {
     raceStarted = true;
     vehicle.startRace({ totalLaps: RACE_MODES[activeMode].laps });
     raceSystem.start();
+    const launchQuality = launchThrottleAt !== null && vehicle.input.throttle > 0.5
+      ? launchThrottleAt <= 0.36 ? 'perfect' : launchThrottleAt <= 0.85 ? 'good' : null
+      : null;
+    if (launchQuality) {
+      vehicle.primeLaunchBoost(launchQuality);
+      showCallout(launchQuality === 'perfect' ? '完美起步！' : '起步喷！', 1.25);
+      if (launchQuality === 'perfect') announce('perfect_start');
+      fovRush = 1;
+      haptic([14, 30, 14]);
+    }
+    if (activeMode === 'timeTrial' && !isOnline) {
+      ghostRecorder = createGhostRecorder();
+      ghostRecorder.begin();
+      if (ghostData && preferences.ghostEnabled) {
+        ensureGhostCar();
+        ghostPlayer.start(ghostData);
+      }
+    }
     ui.countdown.textContent = 'GO!';
     ui.countdown.classList.remove('pulse');
     void ui.countdown.offsetWidth;
     ui.countdown.classList.add('pulse');
-    audio.countdown(true);
+    if (!audio.voice('go')) audio.countdown(true);
     setTimeout(() => { ui.countdown.textContent = ''; }, 700);
   }
 }
@@ -1016,6 +1241,7 @@ function resetRace() {
 function startRaceFromHome() {
   if (isOnline) return;
   audio.start();
+  music.start(activeTrackId);
   prepareRace(selectedMode);
   homeVisible = false;
   paused = false;
@@ -1044,6 +1270,10 @@ function showHome() {
   previousForwardSpeed = 0;
   raceSystem.reset();
   itemRace.reset({ enabled: false });
+  driftEffects.reset();
+  stopGhost();
+  music.stop();
+  renderRankBadge();
   homeVisible = true;
   raceStarted = false;
   paused = false;
@@ -1069,6 +1299,7 @@ function setPaused(value) {
   paused = value;
   vehicle.setPaused(value);
   raceSystem.setPaused(value);
+  music.setEnabled(preferences.musicEnabled && !value);
   ui.pauseMenu.hidden = !value || vehicle.state.finished;
   if (!value) ui.resultMenu.hidden = true;
   if (!value) clock.getDelta();
@@ -1089,6 +1320,10 @@ for (const button of document.querySelectorAll('[data-race-mode]')) {
 }
 ui.soundEnabled.addEventListener('change', () => applyPreferences({ soundEnabled: ui.soundEnabled.checked }));
 ui.masterVolume.addEventListener('input', () => applyPreferences({ masterVolume: Number(ui.masterVolume.value) }));
+ui.musicEnabled.addEventListener('change', () => applyPreferences({ musicEnabled: ui.musicEnabled.checked }));
+ui.musicVolume.addEventListener('input', () => applyPreferences({ musicVolume: Number(ui.musicVolume.value) }));
+ui.voiceEnabled.addEventListener('change', () => applyPreferences({ voiceEnabled: ui.voiceEnabled.checked }));
+ui.ghostEnabled.addEventListener('change', () => applyPreferences({ ghostEnabled: ui.ghostEnabled.checked }));
 ui.qualitySetting.addEventListener('change', () => applyPreferences({ quality: ui.qualitySetting.value }));
 ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibration: ui.vibrationEnabled.checked }));
 ui.cameraShakeEnabled.addEventListener('change', () => applyPreferences({ cameraShake: ui.cameraShakeEnabled.checked }));
@@ -1118,6 +1353,7 @@ document.addEventListener('visibilitychange', () => {
 
 function beginOnlineRace(startAt) {
   audio.start();
+  music.start(activeTrackId);
   prepareRace('race');
   homeVisible = false;
   paused = false;
@@ -1143,8 +1379,39 @@ if (isOnline) {
 
 vehicle.on('lap', (state) => {
   haptic(25);
-  showCallout(`第 ${state.lap} 圈`, 1.5);
+  if (!state.finished && state.totalLaps > 1 && state.lap === state.totalLaps) {
+    showCallout('最后一圈！', 1.6);
+    announce('final_lap');
+  } else if (!state.finished) {
+    showCallout(`第 ${state.lap} 圈`, 1.5);
+  }
 });
+vehicle.on('miniBoost', ({ source, chain }) => {
+  fovRush = Math.max(fovRush, source === 'launch' ? 1 : 0.55);
+  if (source === 'drift' && chain > 1) {
+    showCallout(`连喷 x${chain}`, 0.95);
+    if (chain === 2) announce('chain_boost');
+    haptic(14);
+  }
+});
+vehicle.on('doubleBoost', () => {
+  fovRush = 1;
+  showCallout('双喷！', 1);
+  announce('double_boost');
+  haptic([12, 26, 12]);
+});
+vehicle.on('landingBoost', () => {
+  fovRush = Math.max(fovRush, 0.7);
+  showCallout('落地喷！', 1);
+  announce('landing_boost');
+  haptic(20);
+});
+vehicle.on('padBoost', () => {
+  fovRush = Math.max(fovRush, 0.8);
+  audio.tone(680, 0.22, 0.15, 'square');
+  haptic(12);
+});
+vehicle.on('rampLaunch', () => haptic(10));
 vehicle.on('driftEnd', ({ points, combo, nitro }) => {
   haptic(18);
   showCallout(`DRIFT +${points}  N2O +${nitro}  x${combo}`, 1.15);
@@ -1168,6 +1435,11 @@ itemRace.on('hit', ({ blocked }) => {
   haptic(blocked ? [8, 20, 8] : 45);
   showCallout(blocked ? '护盾抵消攻击' : '遭到道具攻击', 1.05);
 });
+itemRace.on('strike', ({ blocked }) => {
+  if (!blocked) haptic(14);
+  showCallout(blocked ? '对手护盾抵消' : '命中对手！', 1);
+});
+itemRace.on('explosion', () => haptic(18));
 raceSystem.on('finish', (result) => {
   const mode = RACE_MODES[activeMode];
   const onlineStandings = isOnline ? getOnlineStandings() : null;
@@ -1180,6 +1452,29 @@ raceSystem.on('finish', (result) => {
   };
   const recordUpdate = recordRaceResult(modeResult);
   raceRecords = recordUpdate.records;
+  if (activeMode === 'timeTrial' && ghostRecorder) {
+    const completedGhost = ghostRecorder.complete(modeResult.finalTime);
+    ghostRecorder = null;
+    if (completedGhost && recordUpdate.isNewModeBest) {
+      const serialized = serializeGhost(completedGhost);
+      if (serialized) saveGhost(activeTrackId, serialized);
+    }
+  }
+  let rankOutcome = null;
+  if (activeMode === 'race') {
+    rankOutcome = applyRankResult(rankState, {
+      position: modeResult.position,
+      totalRacers: modeResult.entrants,
+    }, Date.now());
+    rankState = rankOutcome.state;
+    saveRankState(rankState);
+    renderRankBadge();
+  }
+  if (activeMode === 'race' || activeMode === 'items') {
+    if (modeResult.position === 1 && modeResult.entrants > 1) announce('finish_first');
+  } else if (recordUpdate.isNewModeBest) {
+    announce('new_record');
+  }
   showCallout(
     mode.rivals > 0
       ? `FINISH  P${modeResult.position}/${modeResult.entrants}`
@@ -1203,6 +1498,18 @@ raceSystem.on('finish', (result) => {
       ? recordUpdate.isNewModeBest ? 'NEW HIGH SCORE' : 'HIGH SCORE'
       : recordUpdate.isNewModeBest ? 'NEW PERSONAL BEST' : 'PERSONAL BEST';
     ui.recordStatus.classList.toggle('new-record', recordUpdate.isNewModeBest);
+    if (rankOutcome) {
+      ui.resultRankRow.hidden = false;
+      ui.resultRankLabel.textContent = rankOutcome.label;
+      ui.resultRankDelta.textContent = `${rankOutcome.delta >= 0 ? '+' : ''}${rankOutcome.delta}`;
+      ui.resultRankDelta.classList.toggle('negative', rankOutcome.delta < 0);
+      if (rankOutcome.promoted) {
+        announce('rank_up');
+        showCallout(`晋级 ${rankOutcome.label}`, 2);
+      }
+    } else {
+      ui.resultRankRow.hidden = true;
+    }
     ui.resultMenu.hidden = false;
   }, 1750);
 });
@@ -1210,6 +1517,7 @@ raceSystem.on('finish', (result) => {
 syncSettingsUi();
 selectMode(preferences.lastMode, { persist: false });
 setRivalsVisible(0);
+renderRankBadge();
 ui.hudTrackName.textContent = activeTrack.shortTitle;
 ui.raceFeedTitle.textContent = activeTrack.title;
 ui.raceFeedMeta.textContent = activeTrack.meta;
@@ -1220,6 +1528,14 @@ for (const button of document.querySelectorAll('[data-track]')) {
     const nextTrack = button.dataset.track;
     if (isOnline || !nextTrack || nextTrack === activeTrackId) return;
     preferences = savePreferences({ ...preferences, lastTrack: nextTrack });
+    location.reload();
+  });
+}
+for (const button of document.querySelectorAll('[data-car]')) {
+  button.addEventListener('click', () => {
+    const nextCar = button.dataset.car;
+    if (isOnline || !nextCar || nextCar === selectedCar.id) return;
+    preferences = savePreferences({ ...preferences, carId: nextCar });
     location.reload();
   });
 }
@@ -1270,18 +1586,25 @@ function animate() {
   if (!paused) {
     elapsed += dt;
     startDelay += dt;
+    overtakeCooldown = Math.max(0, overtakeCooldown - dt);
     updateCountdown(dt);
     vehicle.update(raceStarted ? dt : 0);
     updateRivals(dt);
     itemRace.update(dt, { racing: raceStarted });
     sendOnlineState();
     world.update(elapsed);
+    featureMeshes.userData.update?.(elapsed);
     updateParticles(dt);
     updateWindStreaks(dt);
     updateCarVisuals(dt);
+    driftEffects.update(dt, fillDriftFrame());
+    updateGhost();
     updateCamera(dt);
     updateUi();
     audio.update(vehicle.speedKph, vehicle.input.throttle, vehicle.boosting);
+    music.setIntensity(
+      THREE.MathUtils.smoothstep(vehicle.speedKph, 60, 300) * 0.75 + (vehicle.boosting ? 0.25 : 0),
+    );
 
     if (vehicle.drifting && !lastDrifting) showCallout('PERFECT DRIFT', 1.05);
     if (vehicle.boosting && !lastBoosting) showCallout('NITRO BURST', 0.9);
@@ -1376,9 +1699,11 @@ function animate() {
           vehicle.update(step);
           updateRivals(step);
           world.update(elapsed);
+          featureMeshes.userData.update?.(elapsed);
           updateParticles(step);
           updateWindStreaks(step);
           updateCarVisuals(step);
+          driftEffects.update(step, fillDriftFrame());
         }
         vehicle.setInput({ throttle: 0, brake: 0, steer: 0, drift: 0, nitro: 0 });
         updateCamera(5);

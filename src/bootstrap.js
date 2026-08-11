@@ -4,12 +4,16 @@ import { loadPreferences, savePreferences } from './preferences.js';
 import { loadRaceRecords } from './race-records.js';
 import { MultiplayerClient } from './multiplayer-client.js';
 import { TRACK_CATALOG, normalizeTrackId } from './track-catalog.js';
+import { CAR_CATALOG, getCarById } from './car-catalog.js';
+import { formatRank, getRankTier, loadRankState } from './ranked.js';
 
 const ui = Object.fromEntries([
-  'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeKicker',
-  'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'homeTrackSubtitle', 'trackSelector', 'startRace', 'openMultiplayer',
+  'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeKicker', 'homeRank',
+  'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'homeTrackSubtitle', 'trackSelector', 'garageSelector',
+  'startRace', 'openMultiplayer',
   'openSettings', 'settingsMenu', 'closeSettings', 'soundEnabled',
   'masterVolume', 'volumeValue', 'qualitySetting', 'vibrationEnabled',
+  'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'ghostEnabled',
   'cameraShakeEnabled', 'loading', 'multiplayerMenu', 'closeMultiplayer',
   'onlineConnect', 'onlineLobby', 'onlineName', 'roomCode', 'createRoom', 'joinRoom',
   'copyRoomCode', 'onlineRoomCode', 'onlineMapName', 'onlinePlayers', 'onlineStatus',
@@ -20,6 +24,7 @@ let preferences = loadPreferences();
 const raceRecords = loadRaceRecords();
 let selectedMode = preferences.lastMode;
 let selectedTrack = normalizeTrackId(preferences.lastTrack);
+let selectedCarId = getCarById(preferences.carId).id;
 let bootstrapActive = true;
 let multiplayer = null;
 let onlineBusy = false;
@@ -65,6 +70,57 @@ function revealSelectedTrack(button) {
   }
 }
 
+function renderGarage() {
+  if (!ui.garageSelector) return;
+  const buttons = CAR_CATALOG.map((car) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.car = car.id;
+    button.setAttribute('role', 'tab');
+    const selected = car.id === selectedCarId;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-selected', String(selected));
+    button.style.setProperty('--car-color', car.color);
+    button.style.setProperty('--car-accent', car.accentColor);
+    const chip = document.createElement('span');
+    chip.className = 'car-chip';
+    chip.textContent = car.carClass;
+    const name = document.createElement('strong');
+    name.textContent = car.name;
+    const flavor = document.createElement('small');
+    flavor.textContent = car.flavor;
+    const stats = document.createElement('span');
+    stats.className = 'car-stats';
+    for (const [label, value] of [['速', car.stats.topSpeed], ['集', car.stats.charge], ['控', car.stats.handling]]) {
+      const stat = document.createElement('em');
+      const statLabel = document.createElement('span');
+      statLabel.textContent = label;
+      const bar = document.createElement('i');
+      bar.style.setProperty('--stat', String(value));
+      stat.append(statLabel, bar);
+      stats.append(stat);
+    }
+    button.append(chip, name, flavor, stats);
+    button.addEventListener('click', () => selectCar(car.id));
+    return button;
+  });
+  ui.garageSelector.replaceChildren(...buttons);
+}
+
+function selectCar(carId) {
+  if (!bootstrapActive || !getCarById(carId) || multiplayer?.room) return;
+  selectedCarId = getCarById(carId).id;
+  preferences = savePreferences({ ...preferences, carId: selectedCarId });
+  renderGarage();
+}
+
+function renderRankBadge() {
+  if (!ui.homeRank) return;
+  const rank = loadRankState();
+  ui.homeRank.textContent = formatRank(rank);
+  ui.homeRank.dataset.tier = getRankTier(rank).id;
+}
+
 function renderHome() {
   const mode = RACE_MODES[selectedMode];
   const track = TRACK_CATALOG[selectedTrack];
@@ -91,6 +147,7 @@ function renderHome() {
   ui.homeBest.textContent = selectedMode === 'drift' ? formatScore(best) : formatTime(best);
   ui.homeRaces.textContent = String(raceRecords.modeRaces[selectedMode] ?? 0);
   ui.homeWins.textContent = String(raceRecords.wins);
+  renderRankBadge();
   document.body.dataset.track = selectedTrack;
 }
 
@@ -113,6 +170,12 @@ function syncSettings() {
   ui.masterVolume.value = String(preferences.masterVolume);
   ui.masterVolume.disabled = !preferences.soundEnabled;
   ui.volumeValue.textContent = `${Math.round(preferences.masterVolume * 100)}%`;
+  ui.musicEnabled.checked = preferences.musicEnabled;
+  ui.musicVolume.value = String(preferences.musicVolume);
+  ui.musicVolume.disabled = !preferences.musicEnabled;
+  ui.musicVolumeValue.textContent = `${Math.round(preferences.musicVolume * 100)}%`;
+  ui.voiceEnabled.checked = preferences.voiceEnabled;
+  ui.ghostEnabled.checked = preferences.ghostEnabled;
   ui.qualitySetting.value = preferences.quality;
   ui.vibrationEnabled.checked = preferences.vibration;
   ui.cameraShakeEnabled.checked = preferences.cameraShake;
@@ -297,6 +360,10 @@ ui.openSettings.addEventListener('click', () => setSettingsVisible(true));
 ui.closeSettings.addEventListener('click', () => setSettingsVisible(false));
 ui.soundEnabled.addEventListener('change', () => applyPreferences({ soundEnabled: ui.soundEnabled.checked }));
 ui.masterVolume.addEventListener('input', () => applyPreferences({ masterVolume: Number(ui.masterVolume.value) }));
+ui.musicEnabled.addEventListener('change', () => applyPreferences({ musicEnabled: ui.musicEnabled.checked }));
+ui.musicVolume.addEventListener('input', () => applyPreferences({ musicVolume: Number(ui.musicVolume.value) }));
+ui.voiceEnabled.addEventListener('change', () => applyPreferences({ voiceEnabled: ui.voiceEnabled.checked }));
+ui.ghostEnabled.addEventListener('change', () => applyPreferences({ ghostEnabled: ui.ghostEnabled.checked }));
 ui.qualitySetting.addEventListener('change', () => applyPreferences({ quality: ui.qualitySetting.value }));
 ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibration: ui.vibrationEnabled.checked }));
 ui.cameraShakeEnabled.addEventListener('change', () => applyPreferences({ cameraShake: ui.cameraShakeEnabled.checked }));
@@ -335,5 +402,6 @@ ui.homeMenu.hidden = false;
 ui.loading.classList.add('done');
 ui.loading.style.display = 'none';
 syncSettings();
+renderGarage();
 renderHome();
 window.__NEON_APEX_BOOTSTRAP_READY__ = true;

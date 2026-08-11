@@ -3,16 +3,22 @@ export const PREFERENCES_KEY = 'neon-apex:preferences:v1';
 export const DEFAULT_PREFERENCES = Object.freeze({
   soundEnabled: true,
   masterVolume: 0.7,
+  musicEnabled: true,
+  musicVolume: 0.5,
+  voiceEnabled: true,
+  ghostEnabled: true,
   quality: 'auto',
   vibration: true,
   cameraShake: true,
   lastMode: 'race',
   lastTrack: 'night',
+  carId: 'volt',
 });
 
 const QUALITY_OPTIONS = new Set(['auto', 'balanced', 'high']);
 const MODE_OPTIONS = new Set(['race', 'items', 'timeTrial', 'drift']);
 const TRACK_OPTIONS = new Set(['night', 'day', 'alpine', 'canyon', 'coast']);
+const CAR_OPTIONS = new Set(['volt', 'raiden', 'nimbus', 'goliath']);
 
 function defaultStorage() {
   try {
@@ -22,16 +28,25 @@ function defaultStorage() {
   }
 }
 
+function normalizeVolume(value, fallback) {
+  const volume = Number(value);
+  return Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : fallback;
+}
+
 export function normalizePreferences(value = {}) {
-  const volume = Number(value?.masterVolume);
   return {
     soundEnabled: typeof value?.soundEnabled === 'boolean' ? value.soundEnabled : DEFAULT_PREFERENCES.soundEnabled,
-    masterVolume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : DEFAULT_PREFERENCES.masterVolume,
+    masterVolume: normalizeVolume(value?.masterVolume, DEFAULT_PREFERENCES.masterVolume),
+    musicEnabled: typeof value?.musicEnabled === 'boolean' ? value.musicEnabled : DEFAULT_PREFERENCES.musicEnabled,
+    musicVolume: normalizeVolume(value?.musicVolume, DEFAULT_PREFERENCES.musicVolume),
+    voiceEnabled: typeof value?.voiceEnabled === 'boolean' ? value.voiceEnabled : DEFAULT_PREFERENCES.voiceEnabled,
+    ghostEnabled: typeof value?.ghostEnabled === 'boolean' ? value.ghostEnabled : DEFAULT_PREFERENCES.ghostEnabled,
     quality: QUALITY_OPTIONS.has(value?.quality) ? value.quality : DEFAULT_PREFERENCES.quality,
     vibration: typeof value?.vibration === 'boolean' ? value.vibration : DEFAULT_PREFERENCES.vibration,
     cameraShake: typeof value?.cameraShake === 'boolean' ? value.cameraShake : DEFAULT_PREFERENCES.cameraShake,
     lastMode: MODE_OPTIONS.has(value?.lastMode) ? value.lastMode : DEFAULT_PREFERENCES.lastMode,
     lastTrack: TRACK_OPTIONS.has(value?.lastTrack) ? value.lastTrack : DEFAULT_PREFERENCES.lastTrack,
+    carId: CAR_OPTIONS.has(value?.carId) ? value.carId : DEFAULT_PREFERENCES.carId,
   };
 }
 

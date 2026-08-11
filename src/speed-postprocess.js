@@ -51,10 +51,10 @@ export function createSpeedPostProcess({ qualityTier = 'high' } = {}) {
 
   return {
     pass,
-    update({ speedKph = 0, boosting = false, aspect = 1, delta = 1 / 60 } = {}) {
+    update({ speedKph = 0, boosting = false, rush = 0, aspect = 1, delta = 1 / 60 } = {}) {
       const speed = THREE.MathUtils.smoothstep(speedKph, 145, 330);
-      const target = (0.026 + speed * 0.058 + (boosting ? 0.026 : 0)) * speed * qualityScale;
-      currentStrength = THREE.MathUtils.damp(currentStrength, target, boosting ? 9 : 5, delta);
+      const target = ((0.026 + speed * 0.058 + (boosting ? 0.026 : 0)) * speed + rush * 0.052) * qualityScale;
+      currentStrength = THREE.MathUtils.damp(currentStrength, target, boosting || rush > 0.2 ? 9 : 5, delta);
       pass.uniforms.strength.value = currentStrength;
       pass.enabled = currentStrength > 0.001;
       pass.uniforms.aspect.value = Math.max(0.6, aspect);

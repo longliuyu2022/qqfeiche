@@ -1,4 +1,7 @@
 export const RACE_RECORDS_KEY = 'neon-apex:race-records:v1';
+export const GHOST_KEY_PREFIX = 'neon-apex:ghost:';
+
+const GHOST_MAX_SERIALIZED_LENGTH = 80_000;
 
 const EMPTY_RECORDS = Object.freeze({
   races: 0,
@@ -112,4 +115,48 @@ export function recordRaceResult(result, storage) {
     isNewBestLap,
     isNewModeBest: isNewBestTime || isNewTimeTrialBest || isNewDriftBest || isNewItemBest,
   };
+}
+
+function ghostStorageKey(trackId) {
+  return `${GHOST_KEY_PREFIX}${trackId}`;
+}
+
+function validTrackId(trackId) {
+  return typeof trackId === 'string' && trackId.length > 0;
+}
+
+export function saveGhost(trackId, serialized, storage) {
+  const target = storage === undefined ? defaultStorage() : storage;
+  if (!validTrackId(trackId)) return false;
+  if (typeof serialized !== 'string' || serialized.length === 0) return false;
+  if (serialized.length > GHOST_MAX_SERIALIZED_LENGTH) return false;
+  if (!target?.setItem) return false;
+  try {
+    target.setItem(ghostStorageKey(trackId), serialized);
+    return true;
+  } catch {
+    // Storage can be unavailable in private or embedded browser contexts.
+    return false;
+  }
+}
+
+export function loadGhost(trackId, storage) {
+  const target = storage === undefined ? defaultStorage() : storage;
+  if (!validTrackId(trackId) || !target?.getItem) return null;
+  try {
+    const stored = target.getItem(ghostStorageKey(trackId));
+    return typeof stored === 'string' && stored.length > 0 ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearGhost(trackId, storage) {
+  const target = storage === undefined ? defaultStorage() : storage;
+  if (!validTrackId(trackId)) return;
+  try {
+    target?.removeItem?.(ghostStorageKey(trackId));
+  } catch {
+    // Storage can be unavailable in private or embedded browser contexts.
+  }
 }

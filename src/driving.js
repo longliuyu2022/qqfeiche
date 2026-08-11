@@ -53,6 +53,27 @@ const DEFAULTS = Object.freeze({
   nitroChainWindow: 3.4,
   nitroChainDrainReduction: 0.07,
   nitroChainAccelerationBonus: 0.04,
+  miniBoostAcceleration: 30,
+  miniBoostDuration: 0.62,
+  miniBoostSpeedMultiplier: 1.16,
+  doubleBoostAcceleration: 14,
+  doubleBoostSpeedMultiplier: 1.24,
+  launchPerfectDuration: 1.05,
+  launchGoodDuration: 0.6,
+  launchPerfectImpulse: 9,
+  launchGoodImpulse: 5,
+  landingBoostDuration: 0.55,
+  landingMinAirTime: 0.28,
+  gravity: 30,
+  padBoostDuration: 0.9,
+  padBoostAcceleration: 26,
+  padBoostSpeedMultiplier: 1.2,
+  padBoostImpulse: 6,
+  padCooldown: 1.2,
+  rampLaunchSlopeGain: 1.15,
+  rampMinLaunchSpeed: 3.5,
+  rampMaxLaunchSpeed: 12,
+  chargeThresholds: [8, 20, 34],
   maxDelta: 0.1,
   maxSubstep: 1 / 90,
 });
@@ -134,7 +155,17 @@ export class ArcadeVehicle {
     this._driftSessionScore = 0;
     this._driftSessionTime = 0;
     this._driftSessionNitro = 0;
+    this._driftChargeGross = 0;
     this._pendingNitroLinks = 0;
+    this._featureZones = null;
+    this._padCooldowns = new Map();
+    this._activeRampId = null;
+    this._rampExtra = 0;
+    this._heightOffset = 0;
+    this._verticalVelocity = 0;
+    this._airTime = 0;
+    this._justLanded = 0;
+    this._lastMiniBoostAt = -Infinity;
 
     this.state = {
       speedMps: 0,
@@ -190,6 +221,14 @@ export class ArcadeVehicle {
       nitroChain: 0,
       nitroChainTime: 0,
       nitroLinks: 0,
+      miniBoostTime: 0,
+      miniBoostLevel: 0,
+      boostChain: 0,
+      chargeLevel: 0,
+      airborne: false,
+      airTime: 0,
+      padBoostTime: 0,
+      launchQuality: null,
       raceStatus: 'idle',
       result: null,
       position: this.position,
@@ -288,6 +327,44 @@ export class ArcadeVehicle {
       progress: sample.progress,
       segmentIndex: sample.segmentIndex,
     };
+  }
+
+  /**
+   * Registers boost pad and ramp zones produced by featureZonesForPhysics().
+   * Zones use progress fractions in [0, 1] with start < end (no wrap).
+   */
+  setTrackFeatures(zones) {
+    const hasZones = Boolean(zones && (zones.pads?.length || zones.ramps?.length));
+    this._featureZones = hasZones
+      ? { pads: [...(zones.pads ?? [])], ramps: [...(zones.ramps ?? [])] }
+      : null;
+    this._padCooldowns.clear();
+    this._activeRampId = null;
+    this._rampExtra = 0;
+    return this;
+  }
+
+  /**
+   * Grants the launch boost earned by throttle timing during the countdown.
+   * Call exactly once when the race goes green.
+   */
+  primeLaunchBoost(quality = 'good') {
+    if (quality !== 'perfect' && quality !== 'good') return false;
+    const perfect = quality === 'perfect';
+    _forward.set(Math.sin(this.heading), 0, Math.cos(this.heading));
+    this.velocity.addScaledVector(
+      _forward,
+      perfect ? this.config.launchPerfectImpulse : this.config.launchGoodImpulse,
+    );
+    this.state.launchQuality = quality;
+    this._triggerMiniBoost(
+      perfect ? 2 : 1,
+      perfect ? this.config.launchPerfectDuration : this.config.launchGoodDuration,
+      'launch',
+    );
+    this._updatePublicState();
+    this._emit('launchBoost', { quality, state: this.getSnapshot() });
+    return true;
   }
 
   setInput(values = {}) {
@@ -471,6 +548,22 @@ export class ArcadeVehicle {
     this.state.nitroChain = 0;
     this.state.nitroChainTime = 0;
     this.state.nitroLinks = 0;
+    this.state.miniBoostTime = 0;
+    this.state.miniBoostLevel = 0;
+    this.state.boostChain = 0;
+    this.state.chargeLevel = 0;
+    this.state.airborne = false;
+    this.state.airTime = 0;
+    this.state.padBoostTime = 0;
+    this.state.launchQuality = null;
+    this._padCooldowns.clear();
+    this._activeRampId = null;
+    this._rampExtra = 0;
+    this._heightOffset = 0;
+    this._verticalVelocity = 0;
+    this._airTime = 0;
+    this._justLanded = 0;
+    this._lastMiniBoostAt = -Infinity;
     this._lastTrackProgress = this.state.trackProgress;
     this._courseProgress = 0;
     this._nextCheckpointNumber = 1;
@@ -486,6 +579,7 @@ export class ArcadeVehicle {
     this._driftSessionScore = 0;
     this._driftSessionTime = 0;
     this._driftSessionNitro = 0;
+    this._driftChargeGross = 0;
     this._pendingNitroLinks = 0;
     this._previousRacePosition.copy(this.position);
     this._buildRaceCheckpoints(this.state.trackProgress);
@@ -528,6 +622,17 @@ export class ArcadeVehicle {
     this._wrongWayRespawnTime = 0;
     this._stuckTime = 0;
     this._collisionCooldown = 0;
+    this.state.miniBoostTime = 0;
+    this.state.miniBoostLevel = 0;
+    this.state.padBoostTime = 0;
+    this.state.airborne = false;
+    this.state.airTime = 0;
+    this._activeRampId = null;
+    this._rampExtra = 0;
+    this._heightOffset = 0;
+    this._verticalVelocity = 0;
+    this._airTime = 0;
+    this._justLanded = 0;
 
     if (Number.isFinite(options.heading ?? options.startHeading)) {
       this.heading = options.heading ?? options.startHeading;
@@ -571,6 +676,11 @@ export class ArcadeVehicle {
       this.state.nitroChain = 0;
       this.state.nitroChainTime = 0;
       this.state.nitroLinks = 0;
+      this.state.boostChain = 0;
+      this.state.chargeLevel = 0;
+      this.state.launchQuality = null;
+      this._padCooldowns.clear();
+      this._lastMiniBoostAt = -Infinity;
       this.state.raceStatus = 'idle';
       this.state.result = null;
       this._nextCheckpointNumber = 1;
@@ -583,6 +693,7 @@ export class ArcadeVehicle {
       this._driftSessionScore = 0;
       this._driftSessionTime = 0;
       this._driftSessionNitro = 0;
+      this._driftChargeGross = 0;
       this._pendingNitroLinks = 0;
     }
     this._previousRacePosition.copy(this.position);
@@ -605,6 +716,17 @@ export class ArcadeVehicle {
     this.state.isDrifting = false;
     this.state.isBoosting = false;
     this.state.driftIntensity = 0;
+    this.state.miniBoostTime = 0;
+    this.state.miniBoostLevel = 0;
+    this.state.padBoostTime = 0;
+    this.state.airborne = false;
+    this.state.airTime = 0;
+    this._activeRampId = null;
+    this._rampExtra = 0;
+    this._heightOffset = 0;
+    this._verticalVelocity = 0;
+    this._airTime = 0;
+    this._justLanded = 0;
     this.state.routeValid = true;
     this.state.missedCheckpoint = false;
     this.state.respawnPending = false;
@@ -747,13 +869,18 @@ export class ArcadeVehicle {
     _forward.set(Math.sin(this.heading), 0, Math.cos(this.heading));
     _right.set(_forward.z, 0, -_forward.x);
     let forwardSpeed = this.velocity.dot(_forward);
-    const driftRequested = this.input.drift > 0.5 && speed > this.config.driftMinSpeed && Math.abs(this.steering) > 0.08;
+    const grounded = !this.state.airborne;
+    const driftRequested = grounded
+      && this.input.drift > 0.5
+      && speed > this.config.driftMinSpeed
+      && Math.abs(this.steering) > 0.08;
 
     const speedAuthority = THREE.MathUtils.smoothstep(Math.abs(forwardSpeed), 0.5, 13);
     const highSpeedSteering = THREE.MathUtils.lerp(1, 0.58, clamp01(speed / this.config.maxSpeed));
     const reverseDirection = forwardSpeed < -0.35 ? -1 : 1;
     let targetYawRate = this.steering * this.config.steeringRate * speedAuthority * highSpeedSteering * reverseDirection;
     if (driftRequested) targetYawRate *= this.config.driftYawMultiplier;
+    if (!grounded) targetYawRate *= 0.4;
     this.yawRate = damp(this.yawRate, targetYawRate, driftRequested ? 8 : 11, delta);
     this.heading = THREE.MathUtils.euclideanModulo(this.heading + this.yawRate * delta + Math.PI, Math.PI * 2) - Math.PI;
 
@@ -762,10 +889,23 @@ export class ArcadeVehicle {
     forwardSpeed = this.velocity.dot(_forward);
 
     const boosting = this.input.nitro > 0.5 && this.input.throttle > 0.05 && forwardSpeed > 5 && this.state.nitro > 0;
+    this.state.miniBoostTime = Math.max(0, this.state.miniBoostTime - delta);
+    if (this.state.miniBoostTime <= 0) this.state.miniBoostLevel = 0;
+    this.state.padBoostTime = Math.max(0, this.state.padBoostTime - delta);
+    const miniActive = this.state.miniBoostTime > 0;
+    const doubleActive = miniActive && this.state.miniBoostLevel >= 2;
+    const padActive = this.state.padBoostTime > 0;
     const chainLevel = Math.min(this.state.nitroChain, 5);
     const chainAcceleration = 1 + chainLevel * this.config.nitroChainAccelerationBonus;
     const surfacePower = THREE.MathUtils.lerp(1, 0.52, this.state.offroad);
-    const speedLimit = this.config.maxSpeed * (boosting ? this.config.nitroSpeedMultiplier : 1);
+    const boostSpeedMultiplier = Math.max(
+      boosting ? this.config.nitroSpeedMultiplier : 1,
+      doubleActive
+        ? this.config.doubleBoostSpeedMultiplier
+        : miniActive ? this.config.miniBoostSpeedMultiplier : 1,
+      padActive ? this.config.padBoostSpeedMultiplier : 1,
+    );
+    const speedLimit = this.config.maxSpeed * boostSpeedMultiplier;
 
     if (this.input.throttle > 0) {
       if (forwardSpeed < -0.5) {
@@ -774,7 +914,10 @@ export class ArcadeVehicle {
         const speedRatio = clamp01(Math.max(0, forwardSpeed) / speedLimit);
         const engineFactor = Math.max(0.2, 1 - 0.78 * speedRatio ** 1.45);
         const acceleration = this.config.acceleration * engineFactor
-          + (boosting ? this.config.nitroAcceleration * chainAcceleration : 0);
+          + (boosting ? this.config.nitroAcceleration * chainAcceleration : 0)
+          + (miniActive ? this.config.miniBoostAcceleration : 0)
+          + (doubleActive ? this.config.doubleBoostAcceleration : 0)
+          + (padActive ? this.config.padBoostAcceleration : 0);
         this.velocity.addScaledVector(_forward, acceleration * surfacePower * this.input.throttle * delta);
       }
     }
@@ -789,12 +932,14 @@ export class ArcadeVehicle {
 
     const grip = driftRequested ? this.config.driftGrip : this.config.normalGrip;
     const lateralSpeed = this.velocity.dot(_right);
-    this.velocity.addScaledVector(_right, -lateralSpeed * (1 - Math.exp(-grip * delta)));
+    const gripScale = grounded ? 1 : 0.12;
+    this.velocity.addScaledVector(_right, -lateralSpeed * (1 - Math.exp(-grip * gripScale * delta)));
 
     const currentSpeed = horizontalLength(this.velocity);
-    const passiveDrag = this.config.rollingResistance + this.config.aerodynamicDrag * currentSpeed * currentSpeed;
+    const passiveDrag = (this.config.rollingResistance + this.config.aerodynamicDrag * currentSpeed * currentSpeed)
+      * (grounded ? 1 : 0.35);
     this._reduceHorizontalSpeed(passiveDrag * delta);
-    if (this.state.offroad > 0) {
+    if (this.state.offroad > 0 && grounded) {
       this._reduceHorizontalSpeed(this.config.offroadDrag * this.state.offroad * delta);
     }
 
@@ -822,6 +967,7 @@ export class ArcadeVehicle {
       this.state.nitro += driftRate * delta;
       const earned = Math.max(0, Math.min(this.state.nitro, this.config.nitroCapacity) - before);
       this._driftSessionNitro += earned;
+      this._driftChargeGross += driftRate * delta;
       this.state.driftNitroEarned = this._driftSessionNitro;
     }
     this.state.nitro = THREE.MathUtils.clamp(this.state.nitro, 0, this.config.nitroCapacity);
@@ -987,7 +1133,120 @@ export class ArcadeVehicle {
     }
 
     const heightResponse = 1 - Math.exp(-14 * delta);
-    this.position.y = THREE.MathUtils.lerp(this.position.y, sample.point.y + this.config.rideHeight, heightResponse);
+    this._updatePadBoost(sample, delta);
+    this._updateVerticalMotion(sample, delta, heightResponse);
+  }
+
+  _updatePadBoost(sample, delta) {
+    for (const [padId, remaining] of this._padCooldowns) {
+      const next = remaining - delta;
+      if (next <= 0) this._padCooldowns.delete(padId);
+      else this._padCooldowns.set(padId, next);
+    }
+    const zones = this._featureZones;
+    if (!zones?.pads?.length || this.state.airborne) return;
+    const progress = this.trackClosed ? wrap01(sample.progress) : clamp01(sample.progress);
+    const forwardSpeed = this.velocity.dot(sample.tangent);
+    if (forwardSpeed < 3) return;
+    for (const pad of zones.pads) {
+      if (progress < pad.start || progress > pad.end) continue;
+      if (Math.abs(sample.offset) > (pad.halfWidth ?? this.trackWidth * 0.5)) continue;
+      if (this._padCooldowns.has(pad.id)) continue;
+      this._padCooldowns.set(pad.id, this.config.padCooldown);
+      this.state.padBoostTime = this.config.padBoostDuration;
+      const padLimit = this.config.maxSpeed * this.config.padBoostSpeedMultiplier;
+      const impulse = Math.min(this.config.padBoostImpulse, Math.max(0, padLimit - forwardSpeed));
+      if (impulse > 0) this.velocity.addScaledVector(sample.tangent, impulse);
+      this._updatePublicState();
+      this._emit('padBoost', { padId: pad.id, state: this.getSnapshot() });
+      break;
+    }
+  }
+
+  _rampHeightAt(ramp, progress) {
+    const span = Math.max(EPSILON, ramp.end - ramp.start);
+    const local = THREE.MathUtils.clamp((progress - ramp.start) / span, 0, 1);
+    return ramp.height * local * local * (3 - 2 * local);
+  }
+
+  _updateVerticalMotion(sample, delta, heightResponse) {
+    const zones = this._featureZones;
+    const halfWidth = Math.max(1, this.trackWidth * 0.5);
+    const progress = this.trackClosed ? wrap01(sample.progress) : clamp01(sample.progress);
+    let rampExtra = 0;
+    let activeRamp = null;
+    if (zones?.ramps?.length) {
+      for (const ramp of zones.ramps) {
+        if (progress < ramp.start || progress > ramp.end) continue;
+        if (Math.abs(sample.offset) > (ramp.halfWidth ?? halfWidth)) continue;
+        activeRamp = ramp;
+        rampExtra = this._rampHeightAt(ramp, progress);
+        break;
+      }
+    }
+
+    if (this.state.airborne) {
+      this._verticalVelocity -= this.config.gravity * delta;
+      this._heightOffset += this._verticalVelocity * delta;
+      this._airTime += delta;
+      if (this._heightOffset <= rampExtra) {
+        this._heightOffset = rampExtra;
+        this._verticalVelocity = 0;
+        this.state.airborne = false;
+        this._justLanded = this._airTime;
+        this._airTime = 0;
+        this._activeRampId = activeRamp?.id ?? null;
+        this._rampExtra = rampExtra;
+      }
+      this.position.y = sample.point.y + this.config.rideHeight + Math.max(0, this._heightOffset);
+      return;
+    }
+
+    const previousRampId = this._activeRampId;
+    const previousExtra = this._rampExtra;
+    if (activeRamp) {
+      this._activeRampId = activeRamp.id;
+      this._rampExtra = rampExtra;
+      this._heightOffset = rampExtra;
+    } else if (previousRampId) {
+      const previousRamp = zones?.ramps?.find((ramp) => ramp.id === previousRampId) ?? null;
+      this._activeRampId = null;
+      this._rampExtra = 0;
+      const exitedForward = previousRamp ? progress >= previousRamp.end - EPSILON : false;
+      if (previousRamp && exitedForward && previousExtra > previousRamp.height * 0.5) {
+        const rampLength = Math.max(4, (previousRamp.end - previousRamp.start) * this.trackLength);
+        const slope = previousRamp.height / rampLength;
+        const forwardSpeed = Math.max(0, this.velocity.dot(sample.tangent));
+        this._verticalVelocity = THREE.MathUtils.clamp(
+          forwardSpeed * slope * this.config.rampLaunchSlopeGain,
+          this.config.rampMinLaunchSpeed,
+          this.config.rampMaxLaunchSpeed,
+        );
+        this._heightOffset = previousExtra;
+        this.state.airborne = true;
+        this._airTime = 0;
+        this._emit('rampLaunch', { rampId: previousRamp.id, speed: forwardSpeed, state: this.getSnapshot() });
+        this.position.y = sample.point.y + this.config.rideHeight + this._heightOffset;
+        return;
+      }
+      if (previousExtra > 0.4) {
+        // Slid off the side of a ramp: fall without a launch impulse.
+        this._verticalVelocity = 0;
+        this._heightOffset = previousExtra;
+        this.state.airborne = true;
+        this._airTime = 0;
+        this.position.y = sample.point.y + this.config.rideHeight + this._heightOffset;
+        return;
+      }
+      this._heightOffset = 0;
+    } else {
+      this._heightOffset = 0;
+    }
+
+    const targetY = sample.point.y + this.config.rideHeight + this._heightOffset;
+    this.position.y = this._heightOffset > 0
+      ? targetY
+      : THREE.MathUtils.lerp(this.position.y, targetY, heightResponse);
   }
 
   _refreshTrackSample() {
@@ -1069,7 +1328,7 @@ export class ArcadeVehicle {
       && currentPlane >= 0
       && forwardTravel > 0
       && lateralOffset <= gateHalfWidth
-      && verticalOffset < 5;
+      && verticalOffset < 9;
   }
 
   _passCheckpoint(expected) {
@@ -1240,6 +1499,21 @@ export class ArcadeVehicle {
   }
 
   _updateSkills(delta) {
+    if (this._justLanded > 0) {
+      const airTime = this._justLanded;
+      this._justLanded = 0;
+      if (airTime >= this.config.landingMinAirTime && this.input.throttle > 0.05) {
+        this._triggerMiniBoost(1, this.config.landingBoostDuration, 'landing');
+        if (this.state.started && !this.state.finished) {
+          const landingBonus = 150 * this.state.comboMultiplier;
+          this.state.skillScore += landingBonus;
+          this._emit('landingBoost', { airTime, bonus: Math.round(landingBonus), state: this.getSnapshot() });
+        } else {
+          this._emit('landingBoost', { airTime, bonus: 0, state: this.getSnapshot() });
+        }
+      }
+    }
+
     if (!this.state.started || this.state.finished) {
       this._wasDrifting = this.state.isDrifting;
       this._wasBoosting = this.state.isBoosting;
@@ -1249,6 +1523,14 @@ export class ArcadeVehicle {
     const scoredDrift = this.state.isDrifting
       && this.speedKph > 45
       && this.state.driftIntensity > 0.08;
+    const thresholds = this.config.chargeThresholds;
+    this.state.chargeLevel = this.state.isDrifting
+      ? (this._driftChargeGross >= thresholds[2]
+        ? 3
+        : this._driftChargeGross >= thresholds[1]
+          ? 2
+          : this._driftChargeGross >= thresholds[0] ? 1 : 0)
+      : 0;
     if (scoredDrift) {
       this._driftSessionTime += delta;
       const speedQuality = THREE.MathUtils.clamp(this.speedKph / 240, 0.35, 1.45);
@@ -1269,6 +1551,17 @@ export class ArcadeVehicle {
     }
 
     const boostStarted = this.state.isBoosting && !this._wasBoosting;
+    if (boostStarted && this.state.miniBoostTime > 0 && this.state.miniBoostLevel === 1) {
+      this.state.miniBoostLevel = 2;
+      this.state.miniBoostTime = Math.max(this.state.miniBoostTime, 0.5);
+      const doubleBonus = 240 * this.state.comboMultiplier;
+      this.state.skillScore += doubleBonus;
+      this._emit('doubleBoost', {
+        chain: this.state.boostChain,
+        bonus: Math.round(doubleBonus),
+        state: this.getSnapshot(),
+      });
+    }
     if (boostStarted && this._pendingNitroLinks > 0 && this.state.comboTime > 0) {
       this._pendingNitroLinks -= 1;
       this.state.nitroChain = Math.min(this.config.maxCombo, this.state.nitroChain + 1);
@@ -1310,6 +1603,7 @@ export class ArcadeVehicle {
       this.state.skillScore += banked;
       this.state.comboTime = this.config.comboWindow;
       this._pendingNitroLinks = Math.min(3, this._pendingNitroLinks + 1);
+      this._triggerMiniBoost(1, this.config.miniBoostDuration, 'drift');
       this._emit('driftEnd', {
         points: banked,
         combo: this.state.combo,
@@ -1321,9 +1615,27 @@ export class ArcadeVehicle {
     this._driftSessionScore = 0;
     this._driftSessionTime = 0;
     this._driftSessionNitro = 0;
+    this._driftChargeGross = 0;
     this.state.driftScore = 0;
     this.state.driftDuration = 0;
     this.state.driftNitroEarned = 0;
+  }
+
+  _triggerMiniBoost(level, duration, source) {
+    this.state.miniBoostLevel = Math.max(this.state.miniBoostLevel, level);
+    this.state.miniBoostTime = Math.max(this.state.miniBoostTime, duration);
+    if (source === 'drift') {
+      const sinceLast = this.state.raceTime - this._lastMiniBoostAt;
+      const chainWindow = this.config.comboWindow + this.config.miniBoostDuration;
+      this.state.boostChain = sinceLast <= chainWindow ? this.state.boostChain + 1 : 1;
+      this._lastMiniBoostAt = this.state.raceTime;
+    }
+    this._emit('miniBoost', {
+      level,
+      source,
+      chain: this.state.boostChain,
+      state: this.getSnapshot(),
+    });
   }
 
   _breakSkillChain(reason, emit = true) {
@@ -1331,6 +1643,7 @@ export class ArcadeVehicle {
     this._driftSessionScore = 0;
     this._driftSessionTime = 0;
     this._driftSessionNitro = 0;
+    this._driftChargeGross = 0;
     this._pendingNitroLinks = 0;
     this.state.driftScore = 0;
     this.state.driftDuration = 0;
@@ -1340,6 +1653,12 @@ export class ArcadeVehicle {
     this.state.comboTime = 0;
     this.state.nitroChain = 0;
     this.state.nitroChainTime = 0;
+    this.state.boostChain = 0;
+    this.state.chargeLevel = 0;
+    if (reason === 'collision' || reason === 'respawn') {
+      this.state.miniBoostTime = 0;
+      this.state.miniBoostLevel = 0;
+    }
     if (emit && hadChain) this._emit('comboBreak', { reason, state: this.getSnapshot() });
   }
 
@@ -1357,6 +1676,7 @@ export class ArcadeVehicle {
     this.state.yawRate = this.yawRate;
     this.state.steering = this.steering;
     this.state.slipAngle = speed > 0.2 ? Math.atan2(lateralSpeed, Math.abs(forwardSpeed) + EPSILON) : 0;
+    this.state.airTime = this.state.airborne ? this._airTime : 0;
     this.state.nitroNormalized = this.config.nitroCapacity > 0
       ? this.state.nitro / this.config.nitroCapacity
       : 0;

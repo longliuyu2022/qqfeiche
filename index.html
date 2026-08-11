@@ -114,6 +114,7 @@
             <button data-race-mode="timeTrial" type="button" role="tab" aria-selected="false"><strong>计时</strong><small>单圈</small></button>
             <button data-race-mode="drift" type="button" role="tab" aria-selected="false"><strong>漂移</strong><small>单圈</small></button>
           </div>
+          <div id="garageSelector" class="garage-selector" role="tablist" aria-label="车库选车"></div>
           <div class="home-event">
             <span id="homeEventMeta">HARBOR CITY // 23:48</span>
             <strong id="homeEventTitle">天际线大奖赛</strong>
@@ -121,6 +122,7 @@
           </div>
           <dl class="home-records" aria-label="本地生涯记录">
             <div><dt id="homeBestLabel">PERSONAL BEST</dt><dd id="homeBest">--:--.---</dd></div>
+            <div><dt>RANK</dt><dd id="homeRank">青铜 III · 0分</dd></div>
             <div><dt>RACES</dt><dd id="homeRaces">0</dd></div>
             <div><dt>WINS</dt><dd id="homeWins">0</dd></div>
           </dl>
@@ -164,6 +166,10 @@
           <div class="settings-list">
             <label class="setting-row" for="soundEnabled"><span><b>游戏声音</b><small>引擎与比赛提示音</small></span><input id="soundEnabled" type="checkbox" /></label>
             <label class="setting-row volume-setting" for="masterVolume"><span><b>音量</b><small id="volumeValue">70%</small></span><input id="masterVolume" type="range" min="0" max="1" step="0.05" /></label>
+            <label class="setting-row" for="musicEnabled"><span><b>背景音乐</b><small>比赛中的电子配乐</small></span><input id="musicEnabled" type="checkbox" /></label>
+            <label class="setting-row volume-setting" for="musicVolume"><span><b>音乐音量</b><small id="musicVolumeValue">50%</small></span><input id="musicVolume" type="range" min="0" max="1" step="0.05" /></label>
+            <label class="setting-row" for="voiceEnabled"><span><b>赛事播报</b><small>倒计时与技巧语音</small></span><input id="voiceEnabled" type="checkbox" /></label>
+            <label class="setting-row" for="ghostEnabled"><span><b>影子挑战</b><small>计时赛显示最佳纪录幽灵车</small></span><input id="ghostEnabled" type="checkbox" /></label>
             <label class="setting-row" for="qualitySetting"><span><b>画面质量</b><small>重启后完整应用</small></span><select id="qualitySetting"><option value="auto">自动</option><option value="balanced">流畅</option><option value="high">高画质</option></select></label>
             <label class="setting-row" for="vibrationEnabled"><span><b>触感反馈</b><small>漂移、氮气与碰撞</small></span><input id="vibrationEnabled" type="checkbox" /></label>
             <label class="setting-row" for="cameraShakeEnabled"><span><b>镜头震动</b><small>高速与碰撞反馈</small></span><input id="cameraShakeEnabled" type="checkbox" /></label>
@@ -202,6 +208,11 @@
           <div class="record-strip">
             <span id="recordStatus">PERSONAL BEST</span>
             <b id="personalBest">--:--.---</b>
+          </div>
+          <div id="resultRankRow" class="rank-strip" hidden>
+            <span>排位段位</span>
+            <b id="resultRankLabel">青铜 III</b>
+            <em id="resultRankDelta">+0</em>
           </div>
           <button id="raceAgain" class="primary-action" type="button">再次比赛</button>
           <button id="resultHome" class="secondary-action" type="button">返回首页</button>
