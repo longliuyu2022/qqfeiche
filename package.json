@@ -1,6 +1,6 @@
 {
   "name": "neon-apex",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,10 +17,14 @@
     "test:features": "node tests/track-features.mjs",
     "test:ghost": "node tests/ghost.mjs",
     "test:ranked": "node tests/ranked.mjs",
+    "test:shop": "node tests/shop.mjs",
+    "test:ai": "node tests/ai-features.mjs",
+    "test:terrain": "node tests/terrain-clearance.mjs",
     "test:multiplayer": "node tests/multiplayer.mjs",
     "test:race-validation": "node tests/race-validation.mjs",
     "test:items": "node tests/item-race.mjs",
-    "test": "npm run test:race && npm run test:items && npm run test:records && npm run test:preferences && npm run test:tracks && npm run test:features && npm run test:ghost && npm run test:ranked && npm run test:race-validation && npm run test:multiplayer && npm run test:touch && npm run test:keyboard",
+    "test": "npm run test:race && npm run test:items && npm run test:records && npm run test:preferences && npm run test:tracks && npm run test:features && npm run test:terrain && npm run test:ghost && npm run test:ranked && npm run test:shop && npm run test:ai && npm run test:race-validation && npm run test:multiplayer && npm run test:touch && npm run test:keyboard",
+    "test:performance": "node tests/performance.mjs",
     "test:visual": "node tests/visual.mjs",
     "test:sections": "node tests/sections.mjs",
     "test:online-browser": "node tests/online-browser.mjs",

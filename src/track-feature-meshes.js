@@ -303,6 +303,92 @@ function buildRamps(group, ramps, palette, dynamic) {
 }
 
 /**
+ * Builds a shortcut branch: a narrower slab of road leaving and rejoining the
+ * racing line, edged with neon strips and marked by a glowing gate at its
+ * mouth so the corner cut reads as an invitation rather than a hazard.
+ */
+function buildShortcuts(group, shortcuts, palette, dynamic) {
+  if (!shortcuts.length) return;
+  const deckBuilder = createBuilder();
+  const edgeBuilder = createBuilder();
+  const gateBuilder = createBuilder();
+  const deckLift = palette.roadClearance + 0.02;
+  const edgeLift = palette.roadClearance + 0.06;
+
+  for (const shortcut of shortcuts) {
+    const points = shortcut.points ?? [];
+    if (points.length < 2) continue;
+    const halfWidth = shortcut.width / 2;
+    const frames = points.map((point, index) => {
+      const previous = points[Math.max(0, index - 1)];
+      const next = points[Math.min(points.length - 1, index + 1)];
+      const tangent = next.clone().sub(previous);
+      tangent.y = 0;
+      if (tangent.lengthSq() < 1e-6) tangent.set(0, 0, 1);
+      tangent.normalize();
+      const side = new THREE.Vector3().crossVectors(UP, tangent).normalize();
+      return { point: point.clone(), side, normal: UP.clone() };
+    });
+
+    appendStrip(deckBuilder, strip(frames, -halfWidth, halfWidth, deckLift));
+    appendStrip(edgeBuilder, strip(frames, -halfWidth - 0.5, -halfWidth - 0.05, edgeLift));
+    appendStrip(edgeBuilder, strip(frames, halfWidth + 0.05, halfWidth + 0.5, edgeLift));
+
+    // Gate posts at both mouths so the branch is visible while approaching.
+    for (const frameIndex of [0, frames.length - 1]) {
+      const frame = frames[frameIndex];
+      for (const direction of [-1, 1]) {
+        const base = frame.point.clone().addScaledVector(frame.side, direction * (halfWidth + 0.7));
+        const forward = new THREE.Vector3().crossVectors(frame.side, UP).normalize().multiplyScalar(0.32);
+        appendStrip(gateBuilder, [
+          {
+            left: base.clone().sub(forward),
+            right: base.clone().add(forward),
+            v: 0,
+          },
+          {
+            left: base.clone().sub(forward).addScaledVector(UP, 4.2),
+            right: base.clone().add(forward).addScaledVector(UP, 4.2),
+            v: 1,
+          },
+        ]);
+      }
+    }
+  }
+
+  const deckMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1b2228,
+    roughness: 0.88,
+    metalness: 0.04,
+    emissive: new THREE.Color(palette.rail).multiplyScalar(0.12),
+    emissiveIntensity: 0.4,
+  });
+  const edgeMaterial = new THREE.MeshBasicMaterial({
+    color: palette.edge,
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+  const gateMaterial = new THREE.MeshBasicMaterial({
+    color: palette.rail,
+    transparent: true,
+    opacity: 0.6,
+    depthWrite: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+  addStaticMesh(group, deckBuilder, deckMaterial, 'ShortcutDecks', true);
+  const edges = addStaticMesh(group, edgeBuilder, edgeMaterial, 'ShortcutEdges');
+  const gates = addStaticMesh(group, gateBuilder, gateMaterial, 'ShortcutGates');
+  if (edges) edges.renderOrder = 2;
+  if (gates) gates.renderOrder = 3;
+  dynamic.shortcutEdgeMaterial = edgeMaterial;
+  dynamic.shortcutGateMaterial = gateMaterial;
+}
+
+/**
  * Builds every boost pad and jump ramp of a track as a handful of merged
  * meshes (6 draw calls max). `group.userData.update(elapsedSeconds)` animates
  * the chevron flow and neon pulses; pass the main loop's total elapsed time.
@@ -319,9 +405,12 @@ export function buildTrackFeatureMeshes(features, { theme = 'night' } = {}) {
     edgeMaterial: null,
     deckMaterial: null,
     railMaterial: null,
+    shortcutEdgeMaterial: null,
+    shortcutGateMaterial: null,
   };
   buildBoostPads(group, features?.boostPads ?? [], palette, dynamic);
   buildRamps(group, features?.ramps ?? [], palette, dynamic);
+  buildShortcuts(group, features?.shortcuts ?? [], palette, dynamic);
 
   group.userData.update = (elapsedSeconds = 0) => {
     const time = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;
@@ -337,6 +426,12 @@ export function buildTrackFeatureMeshes(features, { theme = 'night' } = {}) {
     }
     if (dynamic.railMaterial) {
       dynamic.railMaterial.opacity = 0.6 + 0.3 * (0.5 + 0.5 * Math.sin(time * 4.2 + 0.5));
+    }
+    if (dynamic.shortcutEdgeMaterial) {
+      dynamic.shortcutEdgeMaterial.opacity = 0.55 + 0.32 * (0.5 + 0.5 * Math.sin(time * 2.6));
+    }
+    if (dynamic.shortcutGateMaterial) {
+      dynamic.shortcutGateMaterial.opacity = 0.45 + 0.35 * (0.5 + 0.5 * Math.sin(time * 2.6 + 0.9));
     }
   };
   return group;

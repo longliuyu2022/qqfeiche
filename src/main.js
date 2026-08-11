@@ -25,12 +25,13 @@ import { loadPreferences, savePreferences } from './preferences.js';
 import { RACE_MODES } from './race-modes.js';
 import { TRACK_CATALOG, normalizeTrackId } from './track-catalog.js';
 import { ItemRaceSystem, ITEM_DEFINITIONS } from './item-race.js';
-import { computeTrackFeatures, featureZonesForPhysics } from './track-features.js';
-import { buildTrackFeatureMeshes } from './track-feature-meshes.js';
+import { computeTrackFeatures, featureZonesForPhysics } from './track-features.js';import { buildTrackFeatureMeshes } from './track-feature-meshes.js';
 import { createDriftEffects } from './drift-effects.js';
 import { DEFAULT_CAR_ID, getCarById, applyCarPhysics } from './car-catalog.js';
 import { createHeroCarVariant } from './procedural-vehicle.js';
 import { createGhostPlayer, createGhostRecorder, serializeGhost, deserializeGhost } from './ghost.js';
+import { earnCoins, getItemById, isOwned, loadWallet, saveWallet } from './shop.js';
+import { createShopUi } from './shop-ui.js';
 import {
   applyRaceResult as applyRankResult,
   formatRank,
@@ -47,11 +48,11 @@ const isOnline = Boolean(onlineSession?.room);
 const TRACK_RUNTIMES = Object.freeze({
   night: Object.freeze({
     curve: NIGHT_TRACK_CURVE,
-    createWorld: (targetScene) => createNightWorld(targetScene),
+    createWorld: (targetScene, options) => createNightWorld(targetScene, options),
   }),
   day: Object.freeze({
     curve: DAY_TRACK_CURVE,
-    createWorld: (targetScene) => createDayWorld(targetScene),
+    createWorld: (targetScene, options) => createDayWorld(targetScene, options),
   }),
   alpine: Object.freeze({
     curve: ALPINE_TRACK_CURVE,
@@ -123,13 +124,14 @@ const speedPost = createSpeedPostProcess({ qualityTier });
 composer.addPass(speedPost.pass);
 composer.addPass(new OutputPass());
 
-const world = activeTrackRuntime.createWorld(scene, { qualityTier });
 const trackFeatures = computeTrackFeatures(trackCurve, { trackId: activeTrackId, roadWidth: 16 });
 const featureZones = featureZonesForPhysics(trackFeatures);
+const world = activeTrackRuntime.createWorld(scene, { qualityTier, shortcutZones: featureZones.shortcuts });
 const featureMeshes = buildTrackFeatureMeshes(trackFeatures, { theme: activeTrackId });
 scene.add(featureMeshes);
 const selectedCar = getCarById(preferences.carId);
-const hero = selectedCar.id === DEFAULT_CAR_ID
+const ownedCar = isOwned(loadWallet(), selectedCar.id) ? selectedCar : getCarById(DEFAULT_CAR_ID);
+const hero = ownedCar.id === DEFAULT_CAR_ID
   ? await createDetailedHeroCar({
     maxAnisotropy: renderer.capabilities.getMaxAnisotropy(),
     onError: (error, url) => runtimeMonitor.assetFailure(url, error),
@@ -139,7 +141,7 @@ const hero = selectedCar.id === DEFAULT_CAR_ID
       if (label) label.textContent = `${activeTrack.loading} ${Math.round((event.loaded / event.total) * 100)}%`;
     },
   })
-  : createHeroCarVariant(selectedCar);
+  : createHeroCarVariant(ownedCar);
 scene.add(hero);
 
 const vehicle = new ArcadeVehicle(applyCarPhysics({
@@ -159,7 +161,7 @@ const vehicle = new ArcadeVehicle(applyCarPhysics({
   driftNitroRate: 18,
   miniBoostAcceleration: 30,
   miniBoostDuration: 0.62,
-}, selectedCar));
+}, ownedCar));
 vehicle.setTrackFeatures(featureZones);
 vehicle.bindKeyboard(window);
 vehicle.bindTouchControls({
@@ -212,6 +214,10 @@ const raceSystem = new RaceSystem({
   startProgress: startT,
   trackWidth: 16,
   totalLaps: 3,
+  trackFeatures: featureZones,
+  // Rivals now earn their pace from pads and ramps instead of a flat speed
+  // bonus. 0.976 cancels the v1.5.0 hand-tuned bump so difficulty is unchanged.
+  speedCompensation: 0.976,
 });
 const itemRace = new ItemRaceSystem({ scene, player: vehicle, rivals, trackCurve });
 
@@ -262,6 +268,7 @@ let ghostRecorder = null;
 let ghostCar = null;
 let ghostData = null;
 let rankState = loadRankState();
+let wallet = loadWallet();
 let raceRecords = loadRaceRecords();
 const clock = new THREE.Clock();
 const cameraTarget = new THREE.Vector3();
@@ -323,13 +330,14 @@ function collectUi() {
     'checkpoint', 'driftScore', 'combo', 'comboBlock', 'countdown', 'callout', 'loading',
     'pauseMenu', 'resultMenu', 'resultTitle', 'resultPosition', 'resultTime', 'bestLap', 'resultScore',
     'recordStatus', 'personalBest',
-    'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeRank',
+    'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeRank', 'homeCoins',
     'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'settingsMenu',
     'soundEnabled', 'masterVolume', 'volumeValue', 'qualitySetting',
     'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'ghostEnabled',
     'vibrationEnabled', 'cameraShakeEnabled', 'hudTrackName', 'raceFeedTitle', 'raceFeedMeta',
     'itemHud', 'itemUse', 'itemIcon', 'itemName',
     'resultRankRow', 'resultRankLabel', 'resultRankDelta',
+    'resultCoinsRow', 'resultCoins',
   ];
   return Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
 }
@@ -970,6 +978,46 @@ function renderRankBadge() {
   ui.homeRank.dataset.tier = getRankTier(rankState).id;
 }
 
+function renderWallet() {
+  if (ui.homeCoins) ui.homeCoins.textContent = Number(wallet.coins || 0).toLocaleString('en-US');
+}
+
+/**
+ * Applies the equipped shop paint to whichever hero car is in the scene. The
+ * glTF car exposes its body material by name; procedural variants hand theirs
+ * over through userData.paint.
+ */
+function applyEquippedPaint(target = hero, currentWallet = wallet) {
+  const paintItem = currentWallet.equipped?.paint ? getItemById(currentWallet.equipped.paint) : null;
+  const bodyColor = paintItem?.payload?.color ?? ownedCar.color;
+  const accentColor = paintItem?.payload?.accentColor ?? ownedCar.accentColor;
+  if (target.userData.paint?.color) {
+    target.userData.paint.color.set(bodyColor);
+  } else {
+    target.traverse((node) => {
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      for (const material of materials) {
+        if (material?.name === 'Paint 1 Carmine') material.color.set(bodyColor);
+      }
+    });
+  }
+  for (const flame of target.userData.nitroFlames ?? []) {
+    flame.material?.color?.set(accentColor);
+  }
+  if (target.userData.underglow?.material?.color) {
+    target.userData.underglow.material.color.set(accentColor);
+  }
+}
+
+const shopUi = createShopUi({
+  getWallet: () => wallet,
+  setWallet: (next) => { wallet = next; },
+  onChange: (next) => {
+    renderWallet();
+    applyEquippedPaint(hero, next);
+  },
+});
+
 function selectMode(modeId, { persist = true } = {}) {
   if (!RACE_MODES[modeId]) return;
   selectedMode = modeId;
@@ -1153,6 +1201,18 @@ function drawMinimap() {
     ctx.fillStyle = '#ffb84d';
     ctx.beginPath(); ctx.arc(mapped.x, mapped.y, 2.6, 0, Math.PI * 2); ctx.fill();
   }
+  for (const shortcut of trackFeatures.shortcuts) {
+    ctx.beginPath();
+    shortcut.points.forEach((point, index) => {
+      const mapped = mapPosition(point);
+      if (index === 0) ctx.moveTo(mapped.x, mapped.y); else ctx.lineTo(mapped.x, mapped.y);
+    });
+    ctx.strokeStyle = vehicle.state.onShortcut ? 'rgba(217,255,67,.95)' : 'rgba(217,255,67,.5)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   rivals.filter((rival) => rival.object.visible).forEach((rival) => {
     const mapped = mapPosition(trackCurve.getPointAt((rival.progress + 1) % 1));
     ctx.fillStyle = '#ff596c';
@@ -1315,6 +1375,7 @@ document.querySelector('#toHome').addEventListener('click', showHome);
 document.querySelector('#resultHome').addEventListener('click', showHome);
 document.querySelector('#openSettings').addEventListener('click', () => setSettingsVisible(true));
 document.querySelector('#closeSettings').addEventListener('click', () => setSettingsVisible(false));
+document.querySelector('#openShop')?.addEventListener('click', () => shopUi.open());
 for (const button of document.querySelectorAll('[data-race-mode]')) {
   button.addEventListener('click', () => selectMode(button.dataset.raceMode));
 }
@@ -1329,6 +1390,10 @@ ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibratio
 ui.cameraShakeEnabled.addEventListener('change', () => applyPreferences({ cameraShake: ui.cameraShakeEnabled.checked }));
 window.addEventListener('keydown', (event) => {
   audio.start();
+  if (shopUi.visible) {
+    if (event.code === 'Escape') shopUi.close();
+    return;
+  }
   if (!ui.settingsMenu.hidden) {
     if (event.code === 'Escape') setSettingsVisible(false);
     return;
@@ -1412,6 +1477,12 @@ vehicle.on('padBoost', () => {
   haptic(12);
 });
 vehicle.on('rampLaunch', () => haptic(10));
+vehicle.on('shortcutEnter', ({ savedMeters }) => {
+  fovRush = Math.max(fovRush, 0.5);
+  showCallout(savedMeters >= 1 ? `近道！省 ${Math.round(savedMeters)}m` : '近道！', 1.2);
+  audio.tone(520, 0.26, 0.13, 'triangle');
+  haptic([10, 20, 10]);
+});
 vehicle.on('driftEnd', ({ points, combo, nitro }) => {
   haptic(18);
   showCallout(`DRIFT +${points}  N2O +${nitro}  x${combo}`, 1.15);
@@ -1475,6 +1546,21 @@ raceSystem.on('finish', (result) => {
   } else if (recordUpdate.isNewModeBest) {
     announce('new_record');
   }
+  const payout = isOnline ? null : earnCoins(wallet, {
+    mode: activeMode,
+    position: modeResult.position,
+    entrants: modeResult.entrants,
+    finalTime: modeResult.finalTime,
+    cleanRace: modeResult.cleanRace,
+    skillScore: modeResult.skillScore,
+    isNewRecord: recordUpdate.isNewModeBest,
+    laps: mode.laps,
+  }, Date.now());
+  if (payout) {
+    wallet = payout.wallet;
+    saveWallet(wallet);
+    renderWallet();
+  }
   showCallout(
     mode.rivals > 0
       ? `FINISH  P${modeResult.position}/${modeResult.entrants}`
@@ -1510,6 +1596,12 @@ raceSystem.on('finish', (result) => {
     } else {
       ui.resultRankRow.hidden = true;
     }
+    if (payout && ui.resultCoinsRow) {
+      ui.resultCoinsRow.hidden = false;
+      ui.resultCoins.textContent = `+${payout.earned}`;
+    } else if (ui.resultCoinsRow) {
+      ui.resultCoinsRow.hidden = true;
+    }
     ui.resultMenu.hidden = false;
   }, 1750);
 });
@@ -1518,6 +1610,8 @@ syncSettingsUi();
 selectMode(preferences.lastMode, { persist: false });
 setRivalsVisible(0);
 renderRankBadge();
+renderWallet();
+applyEquippedPaint();
 ui.hudTrackName.textContent = activeTrack.shortTitle;
 ui.raceFeedTitle.textContent = activeTrack.title;
 ui.raceFeedMeta.textContent = activeTrack.meta;
@@ -1534,13 +1628,17 @@ for (const button of document.querySelectorAll('[data-track]')) {
 for (const button of document.querySelectorAll('[data-car]')) {
   button.addEventListener('click', () => {
     const nextCar = button.dataset.car;
-    if (isOnline || !nextCar || nextCar === selectedCar.id) return;
+    if (isOnline || !nextCar || nextCar === ownedCar.id) return;
     preferences = savePreferences({ ...preferences, carId: nextCar });
     location.reload();
   });
 }
 
 window.__NEON_APEX_ANDROID_BACK__ = () => {
+  if (shopUi.visible) {
+    shopUi.close();
+    return true;
+  }
   if (!ui.settingsMenu.hidden) {
     setSettingsVisible(false);
     return true;

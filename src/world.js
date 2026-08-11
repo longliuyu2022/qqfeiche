@@ -10,6 +10,17 @@ import {
 } from './night-track.js';
 import { addWorldLights, createAtmosphere, createRain, createSky } from './night-atmosphere.js';
 import { createHarborDistrict, createMountainRoad } from './night-districts.js';
+// Shared scenery-placement rules live in scenic-worlds.js so every map obeys the
+// same "stay clear of the whole circuit" contract. See that file for details.
+import {
+  CLEARANCE_EXEMPT,
+  PROP_CLEARANCE,
+  TERRAIN_CLEARANCE,
+  createClearanceField,
+  createShortcutMask,
+  horizontalRadius,
+  markClearanceExempt,
+} from './scenic-worlds.js';
 
 export {
   ROAD_WIDTH,
@@ -469,15 +480,20 @@ function createMountainGeometry(radialSegments = 11) {
   return geometry;
 }
 
-function trackDistance2D(x, z, samples = 100) {
-  let closest = Infinity;
-  for (let i = 0; i < samples; i += 1) {
-    const p = TRACK_CURVE.getPointAt(i / samples);
-    const dx = p.x - x;
-    const dz = p.z - z;
-    closest = Math.min(closest, dx * dx + dz * dz);
+/**
+ * Tags every object a builder adds to `root` with the reason it is allowed to
+ * sit inside the driving corridor - road ribbon, curbs, rails, lamps, tunnel
+ * shell, start gantry and so on are meant to line the racing surface.
+ * tests/terrain-clearance.mjs uses these tags as its whitelist; anything
+ * untagged has to keep its distance from the circuit.
+ */
+function addTagged(root, reason, build) {
+  const start = root.children.length;
+  const result = build();
+  for (let index = start; index < root.children.length; index += 1) {
+    markClearanceExempt(root.children[index], reason);
   }
-  return Math.sqrt(closest);
+  return result;
 }
 
 function setShadow(object, cast = true, receive = true) {
@@ -497,7 +513,7 @@ const NIGHT_DISTRICT_HELPERS = Object.freeze({
 });
 
 
-function createUrbanRoad(root, random) {
+function createUrbanRoad(root, random, clearance) {
   const urban = new THREE.Group();
   urban.name = 'District_VerticalCity';
   const facadeTexture = createFacadeTexture(1);
@@ -529,43 +545,62 @@ function createUrbanRoad(root, random) {
   const dummy = new THREE.Object3D();
   const facadeColor = new THREE.Color();
   const facadePalette = [0x71878c, 0x637276, 0x8b8580, 0x57777a, 0x7d8d84, 0x72738a];
+  const towerGeometry = towers.geometry;
+  let placedTowers = 0;
+  let placedCaps = 0;
   for (let i = 0; i < towerCount; i += 1) {
     const t = 0.285 + random() * 0.31;
     const track = tangentFrame(t);
     const sideSign = i % 2 ? 1 : -1;
-    const lateral = sideSign * (25 + random() * 48);
-    const base = track.point.clone().addScaledVector(track.side, lateral);
     const height = 20 + random() * 76;
     const width = 7 + random() * 15;
     const depth = 8 + random() * 18;
+    const spread = random();
     const towerRotation = Math.atan2(track.tangent.x, track.tangent.z) + (random() - 0.5) * 0.25;
+    // Tower shells used to start 25m off the centre line, close enough for the
+    // corner of a 22x26m block to overhang the road. They are now pushed out
+    // until the whole footprint clears the circuit (and any shortcut branch).
+    const radius = horizontalRadius(towerGeometry, new THREE.Vector3(width, height, depth));
+    const candidate = clearance.place((attempt) => {
+      const lateral = clearance.requiredDistance(radius, PROP_CLEARANCE) + spread * 34 + attempt * 16;
+      const base = track.point.clone().addScaledVector(track.side, lateral * sideSign);
+      return { x: base.x, z: base.z, radius, base };
+    }, 6);
+    if (!candidate) continue;
+    const base = candidate.base;
     dummy.position.set(base.x, base.y + height * 0.5 - 2, base.z);
     dummy.scale.set(width, height, depth);
     dummy.rotation.y = towerRotation;
     dummy.updateMatrix();
-    towers.setMatrixAt(i, dummy.matrix);
+    towers.setMatrixAt(placedTowers, dummy.matrix);
     facadeColor.setHex(facadePalette[i % facadePalette.length]).offsetHSL(
       (random() - 0.5) * 0.018,
       (random() - 0.5) * 0.035,
       (random() - 0.5) * 0.055,
     );
-    towers.setColorAt(i, facadeColor);
-    if (i < roofCapCount) {
+    towers.setColorAt(placedTowers, facadeColor);
+    if (placedCaps < roofCapCount) {
       dummy.position.set(base.x, base.y + height - 0.2, base.z);
       dummy.scale.set(width * (0.24 + random() * 0.18), 2.2 + random() * 4.8, width * (0.24 + random() * 0.18));
       dummy.rotation.set(0, towerRotation, 0);
       dummy.updateMatrix();
-      roofCaps.setMatrixAt(i, dummy.matrix);
+      roofCaps.setMatrixAt(placedCaps, dummy.matrix);
+      placedCaps += 1;
     }
     for (let band = 0; band < 3; band += 1) {
       dummy.position.y = base.y + height * (0.2 + band * 0.27);
       dummy.scale.set(width, Math.max(0.8, height * 0.02), depth);
       dummy.updateMatrix();
-      const index = i * 3 + band;
+      const index = placedTowers * 3 + band;
       windowBands.setMatrixAt(index, dummy.matrix);
       windowBands.setColorAt(index, new THREE.Color((i + band) % 7 === 0 ? 0x8d5368 : 0x54747c));
     }
+    placedTowers += 1;
   }
+  // Trim the draw range so rejected instances never show up at the origin.
+  towers.count = placedTowers;
+  windowBands.count = placedTowers * 3;
+  roofCaps.count = placedCaps;
   towers.castShadow = true;
   towers.receiveShadow = true;
   roofCaps.castShadow = true;
@@ -899,6 +934,11 @@ function createUrbanRoad(root, random) {
   twinGate.add(landmarkTowers, crownBands, skybridge, bridgeRibbon, bridgeBraces, spires);
   twinGate.applyMatrix4(matrixOnTrack(0.515, 0, 0));
   urban.add(twinGate);
+  // Everything in the city district is roadside furniture (barriers, gantries,
+  // entrances, the skybridge gate that straddles the road) except the tower
+  // shells, which are scenery and must satisfy the clearance rule.
+  markClearanceExempt(urban, CLEARANCE_EXEMPT.FURNITURE);
+  for (const scenery of [towers, windowBands, roofCaps]) delete scenery.userData.clearanceExempt;
   root.add(urban);
   return portalFrames.material;
 }
@@ -959,7 +999,7 @@ function createRoadsideDetails(root) {
   root.add(details);
 }
 
-function createTerrain(root, random) {
+function createTerrain(root, random, clearance) {
   const seaMaterial = new THREE.MeshPhysicalMaterial({
     color: 0x07151d,
     roughness: 0.22,
@@ -972,6 +1012,7 @@ function createTerrain(root, random) {
   sea.rotation.x = -Math.PI / 2;
   sea.position.y = -7.5;
   sea.receiveShadow = true;
+  markClearanceExempt(sea, CLEARANCE_EXEMPT.TERRAIN);
   root.add(sea);
 
   const terrainGeometry = new THREE.PlaneGeometry(1450, 1450, 96, 96);
@@ -1010,6 +1051,7 @@ function createTerrain(root, random) {
     flatShading: true,
   }));
   terrain.receiveShadow = true;
+  markClearanceExempt(terrain, CLEARANCE_EXEMPT.TERRAIN);
   root.add(terrain);
 
   const mountainGeometry = createMountainGeometry();
@@ -1027,25 +1069,47 @@ function createTerrain(root, random) {
   const mountains = new THREE.InstancedMesh(mountainGeometry, mountainMaterial, 36);
   const dummy = new THREE.Object3D();
   const mountainColor = new THREE.Color();
+  const point = new THREE.Vector3();
+  let placed = 0;
   for (let i = 0; i < 36; i += 1) {
-    const angle = (i / 36) * Math.PI * 2 + (random() - 0.5) * 0.12;
-    const radius = 640 + random() * 150;
+    // Laid out along the circuit (like the scenic maps) instead of on a ring
+    // around the world origin, so the ridge can never reach the road.
+    const t = ((i + 0.5) / 36 + (random() - 0.5) * 0.008 + 1) % 1;
+    const frame = tangentFrame(t);
+    point.copy(frame.point);
+    const outward = clearance.outwardSign(point, frame.side);
     const height = 70 + random() * 95;
     const width = 78 + random() * 76;
-    dummy.position.set(Math.cos(angle) * radius, height * 0.5 - 6, Math.sin(angle) * radius);
-    dummy.scale.set(width, height, width * (0.65 + random() * 0.45));
-    dummy.rotation.y = random() * Math.PI;
+    const scale = new THREE.Vector3(width, height, width * (0.65 + random() * 0.45));
+    const radius = horizontalRadius(mountainGeometry, scale);
+    const spread = random();
+    const rotation = random() * Math.PI;
+    const candidate = clearance.place((attempt) => {
+      const distance = clearance.requiredDistance(radius, TERRAIN_CLEARANCE) + spread * 120 + attempt * 45;
+      return {
+        x: point.x + frame.side.x * outward * distance,
+        z: point.z + frame.side.z * outward * distance,
+        radius,
+        clearance: TERRAIN_CLEARANCE,
+      };
+    }, 5);
+    if (!candidate) continue;
+    dummy.position.set(candidate.x, height * 0.5 - 6, candidate.z);
+    dummy.scale.copy(scale);
+    dummy.rotation.y = rotation;
     dummy.updateMatrix();
-    mountains.setMatrixAt(i, dummy.matrix);
+    mountains.setMatrixAt(placed, dummy.matrix);
     mountainColor.setHSL(0.48 + random() * 0.04, 0.1, 0.36 + random() * 0.1);
-    mountains.setColorAt(i, mountainColor);
+    mountains.setColorAt(placed, mountainColor);
+    placed += 1;
   }
+  mountains.count = placed;
   mountains.receiveShadow = true;
   root.add(mountains);
   return sea;
 }
 
-function createRoad(root) {
+function createRoad(root, shortcuts) {
   const roadMaterial = applyEnvironmentPbr(
     new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
@@ -1144,13 +1208,21 @@ function createRoad(root) {
   const railGeometry = new THREE.BoxGeometry(0.18, 0.19, segmentLength);
   const railMaterial = new THREE.MeshBasicMaterial({ color: 0x354143, toneMapped: true });
   const rails = new THREE.InstancedMesh(railGeometry, railMaterial, railSamples * 4);
+  rails.userData.guardrail = true;
+  // Rail rows are written through a running index so a shortcut mouth can drop
+  // its segments; without zones every slot is filled exactly as before.
+  let railIndex = 0;
   for (let i = 0; i < railSamples; i += 1) {
     const t = i / railSamples;
-    rails.setMatrixAt(i, matrixOnTrack(t, -ROAD_WIDTH / 2 - 1.35, 0.62, scale));
-    rails.setMatrixAt(i + railSamples, matrixOnTrack(t, ROAD_WIDTH / 2 + 1.35, 0.62, scale));
-    rails.setMatrixAt(i + railSamples * 2, matrixOnTrack(t, -ROAD_WIDTH / 2 - 1.35, 1.05, scale));
-    rails.setMatrixAt(i + railSamples * 3, matrixOnTrack(t, ROAD_WIDTH / 2 + 1.35, 1.05, scale));
+    for (const direction of [-1, 1]) {
+      if (shortcuts.isOpen(t, direction)) continue;
+      for (const vertical of [0.62, 1.05]) {
+        rails.setMatrixAt(railIndex, matrixOnTrack(t, direction * (ROAD_WIDTH / 2 + 1.35), vertical, scale));
+        railIndex += 1;
+      }
+    }
   }
+  rails.count = railIndex;
   rails.castShadow = true;
   rails.receiveShadow = true;
   root.add(rails);
@@ -1162,21 +1234,33 @@ function createRoad(root) {
     railMaterial,
     railSamples * 2,
   );
+  railCaps.userData.guardrail = true;
+  let capIndex = 0;
   for (let i = 0; i < railSamples; i += 1) {
     const t = i / railSamples;
-    railCaps.setMatrixAt(i, matrixOnTrack(t, -ROAD_WIDTH / 2 - 1.35, 1.18, scale));
-    railCaps.setMatrixAt(i + railSamples, matrixOnTrack(t, ROAD_WIDTH / 2 + 1.35, 1.18, scale));
+    for (const direction of [-1, 1]) {
+      if (shortcuts.isOpen(t, direction)) continue;
+      railCaps.setMatrixAt(capIndex, matrixOnTrack(t, direction * (ROAD_WIDTH / 2 + 1.35), 1.18, scale));
+      capIndex += 1;
+    }
   }
+  railCaps.count = capIndex;
   railCaps.castShadow = true;
   root.add(railCaps);
 
   const postGeometry = new THREE.BoxGeometry(0.18, 1.2, 0.18);
   const posts = new THREE.InstancedMesh(postGeometry, railMaterial, railSamples);
+  posts.userData.guardrail = true;
+  let postIndex = 0;
   for (let i = 0; i < railSamples / 2; i += 1) {
     const t = (i * 2) / railSamples;
-    posts.setMatrixAt(i * 2, matrixOnTrack(t, -ROAD_WIDTH / 2 - 1.35, 0.36, scale));
-    posts.setMatrixAt(i * 2 + 1, matrixOnTrack(t, ROAD_WIDTH / 2 + 1.35, 0.36, scale));
+    for (const direction of [-1, 1]) {
+      if (shortcuts.isOpen(t, direction)) continue;
+      posts.setMatrixAt(postIndex, matrixOnTrack(t, direction * (ROAD_WIDTH / 2 + 1.35), 0.36, scale));
+      postIndex += 1;
+    }
   }
+  posts.count = postIndex;
   root.add(posts);
 
   const edgeMaterial = new THREE.MeshBasicMaterial({ color: 0x274f57, toneMapped: true });
@@ -1736,7 +1820,7 @@ function createTunnel(root) {
   return neonMaterial;
 }
 
-function createCity(root, random) {
+function createCity(root, random, clearance) {
   const buildingGeometry = new THREE.BoxGeometry(1, 1, 1);
   const facadeTexture = createFacadeTexture();
   const buildingMaterial = new THREE.MeshStandardMaterial({
@@ -1762,14 +1846,19 @@ function createCity(root, random) {
   const dummy = new THREE.Object3D();
   const color = new THREE.Color();
   let placed = 0;
-  while (placed < count) {
+  let attempts = 0;
+  while (placed < count && attempts < count * 40) {
+    attempts += 1;
     const x = (random() - 0.5) * 360;
     const z = (random() - 0.5) * 310;
-    if (trackDistance2D(x, z, 80) < 52) continue;
     const distance = Math.hypot(x, z);
     const height = Math.max(10, 70 - distance * 0.12) + random() * 58;
     const width = 8 + random() * 15;
     const depth = 8 + random() * 16;
+    // Was a 52m check against 80 samples of the curve; now the shared field
+    // (720 samples plus any shortcut branch) validates the real footprint.
+    const radius = horizontalRadius(buildingGeometry, new THREE.Vector3(width, height, depth));
+    if (!clearance.clears(x, z, radius, PROP_CLEARANCE)) continue;
     dummy.position.set(x, height * 0.5 - 3.5, z);
     dummy.scale.set(width, height, depth);
     dummy.rotation.y = (Math.round(random() * 4) * Math.PI) / 2;
@@ -1789,6 +1878,10 @@ function createCity(root, random) {
     }
     placed += 1;
   }
+  // Bounded retries: if the infield ever gets too tight the block count drops
+  // rather than the loop spinning forever, and the draw range follows.
+  buildings.count = placed;
+  windows.count = placed * 3;
   buildings.castShadow = true;
   buildings.receiveShadow = true;
   root.add(buildings, windows);
@@ -1806,7 +1899,7 @@ function createCity(root, random) {
   root.add(beacons);
 }
 
-function createTracksideNature(root, random) {
+function createTracksideNature(root, random, clearance) {
   const trunkGeometry = new THREE.CylinderGeometry(0.14, 0.24, 2.5, 5);
   const crownGeometry = new THREE.ConeGeometry(1.35, 4.8, 7, 2);
   const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x24251f, roughness: 1 });
@@ -1816,24 +1909,37 @@ function createTracksideNature(root, random) {
   const crowns = new THREE.InstancedMesh(crownGeometry, crownMaterial, treeCount);
   const dummy = new THREE.Object3D();
   const green = new THREE.Color();
+  let placedTrees = 0;
   for (let i = 0; i < treeCount; i += 1) {
     const t = 0.62 + random() * 0.3;
-    const side = random() > 0.5 ? 1 : -1;
-    const lateral = side * (22 + random() * 54);
+    const direction = random() > 0.5 ? 1 : -1;
+    const spread = random();
     const { point, side: sideVector } = tangentFrame(t);
-    const base = point.clone().addScaledVector(sideVector, lateral);
     const heightScale = 0.7 + random() * 1.25;
+    const widthScale = 0.8 + random() * 0.5;
+    const rotation = random() * Math.PI;
+    const radius = horizontalRadius(crownGeometry, new THREE.Vector3(widthScale, heightScale, widthScale));
+    const candidate = clearance.place((attempt) => {
+      const lateral = clearance.requiredDistance(radius, PROP_CLEARANCE) + spread * 40 + attempt * 12;
+      const base = point.clone().addScaledVector(sideVector, lateral * direction);
+      return { x: base.x, z: base.z, radius, base };
+    }, 6);
+    if (!candidate) continue;
+    const base = candidate.base;
     dummy.position.set(base.x, base.y + 1.2 * heightScale - 1.2, base.z);
-    dummy.scale.set(0.8 + random() * 0.5, heightScale, 0.8 + random() * 0.5);
-    dummy.rotation.y = random() * Math.PI;
+    dummy.scale.set(widthScale, heightScale, widthScale);
+    dummy.rotation.y = rotation;
     dummy.updateMatrix();
-    trunks.setMatrixAt(i, dummy.matrix);
+    trunks.setMatrixAt(placedTrees, dummy.matrix);
     dummy.position.y += 2.6 * heightScale;
     dummy.updateMatrix();
-    crowns.setMatrixAt(i, dummy.matrix);
+    crowns.setMatrixAt(placedTrees, dummy.matrix);
     green.setHSL(0.42 + random() * 0.06, 0.32 + random() * 0.22, 0.09 + random() * 0.045);
-    crowns.setColorAt(i, green);
+    crowns.setColorAt(placedTrees, green);
+    placedTrees += 1;
   }
+  trunks.count = placedTrees;
+  crowns.count = placedTrees;
   trunks.castShadow = true;
   crowns.castShadow = true;
   root.add(trunks, crowns);
@@ -1846,20 +1952,38 @@ function createTracksideNature(root, random) {
   );
   const rocks = new THREE.InstancedMesh(rockGeometry, rockMaterial, 76);
   const rockColor = new THREE.Color();
+  let placedRocks = 0;
   for (let i = 0; i < 76; i += 1) {
     const t = 0.62 + random() * 0.3;
-    const lateral = (random() > 0.5 ? 1 : -1) * (18 + random() * 54);
+    const direction = random() > 0.5 ? 1 : -1;
+    const spread = random();
     const { point, side } = tangentFrame(t);
-    const base = point.clone().addScaledVector(side, lateral);
     const size = 1 + random() * 4;
-    dummy.position.set(base.x, base.y - 0.6 + random(), base.z);
-    dummy.scale.set(size * (0.7 + random()), size, size * (0.6 + random()));
-    dummy.rotation.set(random() * Math.PI, random() * Math.PI, random() * Math.PI);
+    const lift = random();
+    const scale = new THREE.Vector3(size * (0.7 + random()), size, size * (0.6 + random()));
+    const spinX = random() * Math.PI;
+    const spinY = random() * Math.PI;
+    const spinZ = random() * Math.PI;
+    // Boulders started 18m out with a radius of up to 8.5m - well inside the
+    // corridor. They are now pushed out until the whole rock clears the road.
+    const radius = horizontalRadius(rockGeometry, scale);
+    const candidate = clearance.place((attempt) => {
+      const lateral = clearance.requiredDistance(radius, PROP_CLEARANCE) + spread * 42 + attempt * 14;
+      const base = point.clone().addScaledVector(side, lateral * direction);
+      return { x: base.x, z: base.z, radius, base };
+    }, 6);
+    if (!candidate) continue;
+    const base = candidate.base;
+    dummy.position.set(base.x, base.y - 0.6 + lift, base.z);
+    dummy.scale.copy(scale);
+    dummy.rotation.set(spinX, spinY, spinZ);
     dummy.updateMatrix();
-    rocks.setMatrixAt(i, dummy.matrix);
+    rocks.setMatrixAt(placedRocks, dummy.matrix);
     rockColor.setHSL(0.48, 0.04, 0.4 + random() * 0.13);
-    rocks.setColorAt(i, rockColor);
+    rocks.setColorAt(placedRocks, rockColor);
+    placedRocks += 1;
   }
+  rocks.count = placedRocks;
   rocks.castShadow = true;
   rocks.receiveShadow = true;
   root.add(rocks);
@@ -1900,7 +2024,22 @@ function createLamps(root) {
   root.add(poles, lamps);
 }
 
-export function createWorld(scene) {
+/**
+ * Builds the Neon Apex night map.
+ *
+ * `options`:
+ *   - `qualityTier`: accepted for API parity with the other maps; the night map
+ *     has a single detail level, so it is currently unused.
+ *   - `shortcutZones`: optional `[{ start, end, side, halfWidth, points }]`.
+ *     `start`/`end`/`side` open the guardrail at a shortcut mouth (start > end
+ *     wraps past the start/finish line, side 1 = positive lateral, i.e. along
+ *     the `side` vector used by matrixOnTrack). `points` (the branch centre
+ *     line, world space) plus `halfWidth` additionally reserve that branch as a
+ *     no-scenery corridor. Omitting the option keeps the map exactly as it was.
+ */
+export function createWorld(scene, options = {}) {
+  const shortcuts = createShortcutMask(options.shortcutZones);
+  const clearance = createClearanceField(TRACK_CURVE, { shortcutZones: options.shortcutZones });
   const random = seededRandom();
   const world = new THREE.Group();
   world.name = 'NeonApexWorld';
@@ -1908,22 +2047,22 @@ export function createWorld(scene) {
   scene.fog = new THREE.FogExp2(0x0a1a1f, 0.00155);
   scene.add(world);
 
-  createSky(world);
+  addTagged(world, CLEARANCE_EXEMPT.BACKDROP, () => createSky(world));
   addWorldLights(world);
-  const water = createTerrain(world, random);
-  const road = createRoad(world);
-  createWetPatches(world, random);
-  const startLine = createStartLine(world);
-  const tunnelNeonMaterial = createTunnel(world);
+  const water = createTerrain(world, random, clearance);
+  const road = addTagged(world, CLEARANCE_EXEMPT.ROAD, () => createRoad(world, shortcuts));
+  addTagged(world, CLEARANCE_EXEMPT.ROAD, () => createWetPatches(world, random));
+  const startLine = addTagged(world, CLEARANCE_EXEMPT.FURNITURE, () => createStartLine(world));
+  const tunnelNeonMaterial = addTagged(world, CLEARANCE_EXEMPT.FURNITURE, () => createTunnel(world));
   const harbor = createHarborDistrict(world, random, NIGHT_DISTRICT_HELPERS);
-  const mountain = createMountainRoad(world, random, NIGHT_DISTRICT_HELPERS);
-  createCity(world, random);
-  const urbanPortalMaterial = createUrbanRoad(world, random);
-  createTracksideNature(world, random);
-  createRoadsideDetails(world);
-  createLamps(world);
-  const stars = createAtmosphere(world, random);
-  const rain = createRain(world, random);
+  const mountain = createMountainRoad(world, random, NIGHT_DISTRICT_HELPERS, { clearance, shortcuts });
+  createCity(world, random, clearance);
+  const urbanPortalMaterial = createUrbanRoad(world, random, clearance);
+  createTracksideNature(world, random, clearance);
+  addTagged(world, CLEARANCE_EXEMPT.FURNITURE, () => createRoadsideDetails(world));
+  addTagged(world, CLEARANCE_EXEMPT.FURNITURE, () => createLamps(world));
+  const stars = addTagged(world, CLEARANCE_EXEMPT.BACKDROP, () => createAtmosphere(world, random));
+  const rain = addTagged(world, CLEARANCE_EXEMPT.BACKDROP, () => createRain(world, random));
 
   const harborWaterMaterial = harbor.userData.waterMaterial;
   const animated = { stars, rain, water, harborWaterMaterial, tunnelNeonMaterial, urbanPortalMaterial };

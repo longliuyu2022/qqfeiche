@@ -86,6 +86,261 @@ function seededRandom(seed) {
   };
 }
 
+/* -------------------------------------------------------------------------- *
+ * Shared scenery-placement helpers.
+ *
+ * Exported from here (instead of a new module) because every map builder -
+ * day-world.js, world.js and night-districts.js - has to obey the same rule:
+ * a prop may only be dropped where its horizontal footprint stays clear of the
+ * WHOLE closed circuit. Measuring the distance to a single sample of the curve
+ * is not enough: the tracks are loops, so the stretch that comes back around
+ * later can run straight through scenery that looked fine next to its own
+ * sample. That was the terrain clip-through bug - mountains were laid out on a
+ * ring around the world origin (radius 430-675, half width up to 160) while the
+ * circuits themselves live between radius 188 and 405.
+ *
+ * The placement rule used everywhere is
+ *     distanceToCurve >= TRACK_HALF_WIDTH + objectRadius + clearance
+ * with `clearance` = PROP_CLEARANCE for ordinary props and TERRAIN_CLEARANCE
+ * for the big terrain shapes.
+ * -------------------------------------------------------------------------- */
+
+/** Half width of the racing surface; matches the road ribbon of every map. */
+export const TRACK_HALF_WIDTH = 8;
+/** Breathing room for ordinary props - cars get knocked off the road a lot. */
+export const PROP_CLEARANCE = 12;
+/** Extra room for mountains, hills and cliffs: unmissable if you hit one. */
+export const TERRAIN_CLEARANCE = 20;
+
+const footprintCache = new WeakMap();
+
+/**
+ * Convex hull of a geometry's vertices projected onto the XZ plane, cached per
+ * geometry. A hull instead of a bounding box matters for the round shapes -
+ * a mountain's box corner sits 25% further out than any actual vertex, which
+ * would push scenery needlessly far from the circuit.
+ */
+export function geometryFootprint(geometry) {
+  const cached = footprintCache.get(geometry);
+  if (cached) return cached;
+  const position = geometry.getAttribute('position');
+  const points = [];
+  if (position) {
+    for (let index = 0; index < position.count; index += 1) {
+      points.push([position.getX(index), position.getZ(index)]);
+    }
+  }
+  const hull = convexHull(points);
+  footprintCache.set(geometry, hull);
+  return hull;
+}
+
+/** Andrew's monotone chain; returns the hull in counter-clockwise order. */
+function convexHull(points) {
+  if (points.length < 3) return points.slice();
+  const sorted = points.slice().sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const build = (list) => {
+    const stack = [];
+    for (const point of list) {
+      while (stack.length >= 2 && cross(stack[stack.length - 2], stack[stack.length - 1], point) <= 0) {
+        stack.pop();
+      }
+      stack.push(point);
+    }
+    stack.pop();
+    return stack;
+  };
+  const hull = build(sorted).concat(build(sorted.slice().reverse()));
+  return hull.length >= 3 ? hull : points.slice();
+}
+
+/**
+ * Horizontal radius of `geometry` once scaled: the furthest any of its vertices
+ * gets from the object origin in the XZ plane. Rotation about Y (the only
+ * rotation scenery gets) cannot change it, so it is a safe bound to place with,
+ * and it keeps callers free of magic numbers - the mountain shape, for example,
+ * reaches 1.07x its scale, so a "width 150" mountain really stretches 160m out
+ * from its centre before the extra Z stretch is applied.
+ */
+export function horizontalRadius(geometry, scale) {
+  const scaleX = Math.abs(scale.x);
+  const scaleZ = Math.abs(scale.z);
+  let radius = 0;
+  for (const [x, z] of geometryFootprint(geometry)) {
+    radius = Math.max(radius, Math.hypot(x * scaleX, z * scaleZ));
+  }
+  return radius;
+}
+
+/**
+ * Densely samples a closed track curve once and answers the placement queries.
+ * `samples` defaults to 720 (the requirement is >= 360); at ~2km per lap that is
+ * a sample every ~2.8m, far finer than any prop radius we test against.
+ *
+ * `shortcutZones` may carry a `points` polyline (the generated shortcut branch,
+ * which leaves the main centre line by up to ~48m) plus its own `halfWidth`.
+ * Those branches are treated as extra corridors: scenery has to clear
+ * `halfWidth + radius + clearance` from every segment of the polyline, exactly
+ * like it clears the main circuit. Zones without `points` only drive guardrail
+ * openings and add no corridor.
+ */
+export function createClearanceField(curve, options = {}) {
+  const samples = options.samples ?? 720;
+  const points = [];
+  const centroid = new THREE.Vector3();
+  for (let index = 0; index < samples; index += 1) {
+    const point = curve.getPointAt(index / samples);
+    points.push(point);
+    centroid.add(point);
+  }
+  centroid.divideScalar(points.length);
+
+  // Corridor 0 is the circuit itself (closed); the rest are shortcut branches.
+  const corridors = [{ halfWidth: TRACK_HALF_WIDTH, points, closed: true }];
+  for (const zone of shortcutCorridors(options.shortcutZones)) corridors.push(zone);
+
+  const distanceToPolyline = (corridor, x, z) => {
+    const list = corridor.points;
+    const last = corridor.closed ? list.length : list.length - 1;
+    let closest = Infinity;
+    for (let index = 0; index < last; index += 1) {
+      const a = list[index];
+      const b = list[(index + 1) % list.length];
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const lengthSquared = dx * dx + dz * dz;
+      let t = lengthSquared > 0 ? ((x - a.x) * dx + (z - a.z) * dz) / lengthSquared : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = x - (a.x + dx * t);
+      const pz = z - (a.z + dz * t);
+      const distanceSquared = px * px + pz * pz;
+      if (distanceSquared < closest) closest = distanceSquared;
+    }
+    return Math.sqrt(closest);
+  };
+
+  const distanceTo = (x, z) => distanceToPolyline(corridors[0], x, z);
+  const clears = (x, z, radius, clearance = PROP_CLEARANCE) => corridors.every(
+    (corridor) => distanceToPolyline(corridor, x, z) >= corridor.halfWidth + radius + clearance,
+  );
+
+  return {
+    points,
+    centroid,
+    corridors,
+    distanceTo,
+    /** Minimum distance an object of `radius` must keep from the racing line. */
+    requiredDistance(radius, clearance = PROP_CLEARANCE) {
+      return TRACK_HALF_WIDTH + radius + clearance;
+    },
+    /**
+     * True when an object of `radius` centred on (x, z) misses every corridor -
+     * the main circuit and any shortcut branch.
+     */
+    clears,
+    /**
+     * Sign of the side vector that points away from the loop interior, so
+     * scenery can be pushed outwards instead of into the infield.
+     */
+    outwardSign(point, side) {
+      const dot = side.x * (point.x - centroid.x) + side.z * (point.z - centroid.z);
+      return dot >= 0 ? 1 : -1;
+    },
+    /**
+     * Deterministic rejection sampling. `propose(attempt)` must build a
+     * candidate `{ x, z, radius, clearance, ... }` using only the caller's
+     * seeded PRNG, so the same seed always yields the same scene. Returns the
+     * first candidate that clears the circuit, or null after `attempts` tries -
+     * callers then skip that instance instead of looping forever.
+     */
+    place(propose, attempts = 10) {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const candidate = propose(attempt);
+        if (!candidate) continue;
+        if (clears(candidate.x, candidate.z, candidate.radius, candidate.clearance)) return candidate;
+      }
+      return null;
+    },
+  };
+}
+
+/**
+ * Normalises the `points` polylines of `shortcutZones` into extra corridors.
+ * Zones without points (or with fewer than two) are ignored, which is what
+ * keeps the guardrail-only form of the option working.
+ */
+function shortcutCorridors(shortcutZones) {
+  if (!Array.isArray(shortcutZones)) return [];
+  const corridors = [];
+  for (const zone of shortcutZones) {
+    const list = Array.isArray(zone?.points) ? zone.points : null;
+    if (!list || list.length < 2) continue;
+    corridors.push({
+      halfWidth: Number.isFinite(zone.halfWidth) ? zone.halfWidth : TRACK_HALF_WIDTH,
+      points: list.map((point) => ({ x: point.x, z: point.z })),
+      closed: false,
+    });
+  }
+  return corridors;
+}
+
+/**
+ * Reasons an object is allowed inside the driving corridor. Used by
+ * tests/terrain-clearance.mjs as the whitelist - anything without a reason has
+ * to keep clear of the road.
+ */
+export const CLEARANCE_EXEMPT = Object.freeze({
+  ROAD: 'road-surface', // drivable ribbon, shoulders, painted markings
+  FURNITURE: 'track-furniture', // curbs, rails, gantries, lamps, start arch, dock props
+  TERRAIN: 'terrain-surface', // ground/water planes the circuit sits on top of
+  BACKDROP: 'backdrop', // sky dome, clouds, aurora - never reachable
+});
+
+/** Tags `object` (and its children) with the reason it may sit near the road. */
+export function markClearanceExempt(object, reason) {
+  object.traverse((child) => {
+    child.userData.clearanceExempt = reason;
+  });
+  return object;
+}
+
+/**
+ * Guardrail openings for the shortcut system.
+ *
+ * `shortcutZones`: `[{ start, end, side }]` where start/end are progress values
+ * along the lap (start > end wraps past the start/finish line) and `side` is
+ * 1 for the positive lateral direction (the `side` vector, UP x tangent),
+ * -1 for the negative one and 0/undefined for both. Barrier builders ask
+ * `isOpen(progress, side)` before emitting a segment.
+ *
+ * With no zones - the default - `isOpen()` always returns false, so every map
+ * keeps exactly the geometry it had before the shortcut system existed.
+ */
+export function createShortcutMask(shortcutZones) {
+  const zones = (Array.isArray(shortcutZones) ? shortcutZones : [])
+    .filter((zone) => zone && Number.isFinite(zone.start) && Number.isFinite(zone.end))
+    .map((zone) => ({
+      start: ((zone.start % 1) + 1) % 1,
+      end: ((zone.end % 1) + 1) % 1,
+      side: Math.sign(zone.side ?? 0),
+    }));
+  const covers = (zone, progress) => (zone.start <= zone.end
+    ? progress >= zone.start && progress <= zone.end
+    : progress >= zone.start || progress <= zone.end);
+  return {
+    zones,
+    /** True when the barrier at `progress` on `side` should be left out. */
+    isOpen(progress, side = 0) {
+      if (zones.length === 0) return false;
+      const wrapped = ((progress % 1) + 1) % 1;
+      return zones.some((zone) => (
+        (zone.side === 0 || side === 0 || zone.side === Math.sign(side)) && covers(zone, wrapped)
+      ));
+    },
+  };
+}
+
 function createMountainGeometry(segments = 16, rings = 8) {
   const positions = [];
   const indices = [];
@@ -266,11 +521,12 @@ function createSky(root, theme) {
     }),
   );
   sky.renderOrder = -100;
+  markClearanceExempt(sky, CLEARANCE_EXEMPT.BACKDROP);
   root.add(sky);
   return sky;
 }
 
-function createGround(root, theme, random, qualityTier) {
+function createGround(root, theme, random, qualityTier, curve, clearance) {
   const segments = qualityTier === 'balanced' ? 44 : 72;
   const geometry = new THREE.PlaneGeometry(1450, 1450, segments, segments);
   const positions = geometry.attributes.position;
@@ -291,6 +547,7 @@ function createGround(root, theme, random, qualityTier) {
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   ground.name = `${theme.name}Terrain`;
+  markClearanceExempt(ground, CLEARANCE_EXEMPT.TERRAIN);
   root.add(ground);
 
   const mountainCount = qualityTier === 'balanced' ? 32 : 54;
@@ -301,30 +558,53 @@ function createGround(root, theme, random, qualityTier) {
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
   const mountainTransforms = [];
+  const point = new THREE.Vector3();
+  const tangent = new THREE.Vector3();
+  const side = new THREE.Vector3();
   for (let index = 0; index < mountainCount; index += 1) {
-    const angle = (index / mountainCount) * Math.PI * 2 + (random() - 0.5) * 0.18;
-    const radius = 430 + random() * 245;
+    // Mountains follow the circuit instead of a ring around the world origin.
+    // The old ring (radius 430-675, half width up to 160m) sliced straight
+    // through every scenic track, which is what buried the road in rock.
+    const progress = ((index + 0.5) / mountainCount + (random() - 0.5) * 0.006) % 1;
+    trackFrame(curve, (progress + 1) % 1, point, tangent, side);
+    const outward = clearance.outwardSign(point, side);
     const width = 58 + random() * 92;
     const height = 90 + random() * (theme.name.includes('Alpine') ? 210 : 145);
-    quaternion.setFromAxisAngle(UP, random() * Math.PI);
-    const position = new THREE.Vector3(Math.cos(angle) * radius, theme.groundBase - 4, Math.sin(angle) * radius);
     const scale = new THREE.Vector3(width, height, width * (0.72 + random() * 0.6));
+    const radius = horizontalRadius(mountainGeometry, scale);
+    const spread = random();
+    quaternion.setFromAxisAngle(UP, random() * Math.PI);
+    const candidate = clearance.place((attempt) => {
+      const distance = clearance.requiredDistance(radius, TERRAIN_CLEARANCE)
+        + spread * 110 + attempt * 42;
+      return {
+        x: point.x + side.x * outward * distance,
+        z: point.z + side.z * outward * distance,
+        radius,
+        clearance: TERRAIN_CLEARANCE,
+      };
+    }, 5);
+    if (!candidate) continue;
+    const position = new THREE.Vector3(candidate.x, theme.groundBase - 4, candidate.z);
     matrix.compose(
       position,
       quaternion,
       scale,
     );
-    mountains.setMatrixAt(index, matrix);
+    mountains.setMatrixAt(mountainTransforms.length, matrix);
     mountainTransforms.push({ position: position.clone(), scale: scale.clone() });
   }
+  // Instances that could not find a clear spot are dropped from the draw range
+  // so no giant untransformed ghost is left sitting at the world origin.
+  mountains.count = mountainTransforms.length;
   mountains.castShadow = qualityTier !== 'balanced';
   mountains.receiveShadow = true;
   root.add(mountains);
 
   if (theme.name.includes('Alpine')) {
     const capMaterial = new THREE.MeshStandardMaterial({ color: 0xb8cbd1, roughness: 0.94, metalness: 0.01 });
-    const caps = new THREE.InstancedMesh(mountainGeometry, capMaterial, mountainCount);
-    for (let index = 0; index < mountainCount; index += 1) {
+    const caps = new THREE.InstancedMesh(mountainGeometry, capMaterial, mountainTransforms.length);
+    for (let index = 0; index < mountainTransforms.length; index += 1) {
       const source = mountainTransforms[index];
       const capScale = source.scale.clone().multiply(new THREE.Vector3(0.28, 0.12, 0.28));
       matrix.compose(
@@ -340,12 +620,13 @@ function createGround(root, theme, random, qualityTier) {
   return ground;
 }
 
-function createRoad(root, curve, theme, qualityTier) {
+function createRoad(root, curve, theme, qualityTier, shortcuts) {
   const rockMaterial = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.9 });
   applyPbr(rockMaterial, theme.materialAsset, [2, 20]);
   for (const direction of [-1, 1]) {
     const embankment = new THREE.Mesh(embankmentGeometry(curve, direction), rockMaterial);
     embankment.receiveShadow = true;
+    markClearanceExempt(embankment, CLEARANCE_EXEMPT.ROAD);
     root.add(embankment);
   }
 
@@ -354,6 +635,7 @@ function createRoad(root, curve, theme, qualityTier) {
     new THREE.MeshStandardMaterial({ color: theme.shoulder, roughness: 0.9 }),
   );
   shoulder.receiveShadow = true;
+  markClearanceExempt(shoulder, CLEARANCE_EXEMPT.ROAD);
   root.add(shoulder);
 
   const roadMaterial = new THREE.MeshStandardMaterial({
@@ -366,6 +648,7 @@ function createRoad(root, curve, theme, qualityTier) {
   const road = new THREE.Mesh(ribbonGeometry(curve, 8, 0.11), roadMaterial);
   road.receiveShadow = true;
   road.name = theme.roadName;
+  markClearanceExempt(road, CLEARANCE_EXEMPT.ROAD);
   root.add(road);
 
   const point = new THREE.Vector3();
@@ -387,6 +670,7 @@ function createRoad(root, curve, theme, qualityTier) {
     markers.setMatrixAt(index, matrix);
   }
   markers.receiveShadow = true;
+  markClearanceExempt(markers, CLEARANCE_EXEMPT.ROAD);
   root.add(markers);
 
   const curbCount = qualityTier === 'balanced' ? 154 : 220;
@@ -400,6 +684,7 @@ function createRoad(root, curve, theme, qualityTier) {
   ];
   const railMaterial = new THREE.MeshStandardMaterial({ color: 0xaebbc0, metalness: 0.72, roughness: 0.32 });
   const rails = new THREE.InstancedMesh(new THREE.BoxGeometry(0.13, 0.36, 3.45), railMaterial, curbCount * 2);
+  rails.userData.guardrail = true;
   let railIndex = 0;
   for (let index = 0; index < curbCount; index += 1) {
     const progress = index / curbCount;
@@ -409,6 +694,8 @@ function createRoad(root, curve, theme, qualityTier) {
       const curbPoint = point.clone().addScaledVector(side, 8.3 * direction).add(new THREE.Vector3(0, 0.22, 0));
       matrix.compose(curbPoint, quaternion, new THREE.Vector3(1, 1, 1));
       curbMeshes[(index + slot) % 2].setMatrixAt(index, matrix);
+      // Shortcut mouths get an opening in the rail so the branch is drivable.
+      if (shortcuts.isOpen(progress, direction)) continue;
       const railPoint = point.clone().addScaledVector(side, 9.45 * direction).add(new THREE.Vector3(0, 0.68, 0));
       matrix.compose(railPoint, quaternion, new THREE.Vector3(1, 1, 1));
       rails.setMatrixAt(railIndex, matrix);
@@ -418,15 +705,18 @@ function createRoad(root, curve, theme, qualityTier) {
   for (const mesh of curbMeshes) {
     mesh.castShadow = qualityTier !== 'balanced';
     mesh.receiveShadow = true;
+    markClearanceExempt(mesh, CLEARANCE_EXEMPT.FURNITURE);
     root.add(mesh);
   }
+  rails.count = railIndex;
   rails.castShadow = qualityTier !== 'balanced';
   rails.receiveShadow = true;
+  markClearanceExempt(rails, CLEARANCE_EXEMPT.FURNITURE);
   root.add(rails);
   return road;
 }
 
-function createTracksideVegetation(root, curve, theme, random, qualityTier, kind) {
+function createTracksideVegetation(root, curve, theme, random, qualityTier, kind, clearance) {
   const count = qualityTier === 'balanced' ? 92 : 190;
   const point = new THREE.Vector3();
   const tangent = new THREE.Vector3();
@@ -443,41 +733,58 @@ function createTracksideVegetation(root, curve, theme, random, qualityTier, kind
   const crownMaterials = theme.foliage.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.92, flatShading: true }));
   const crowns = crownMaterials.map((material) => new THREE.InstancedMesh(crownGeometry, material, Math.ceil(count / crownMaterials.length)));
   const crownIndices = crowns.map(() => 0);
+  let placedTrunks = 0;
 
   for (let index = 0; index < count; index += 1) {
     const progress = random();
     trackFrame(curve, progress, point, tangent, side);
     const direction = random() > 0.5 ? 1 : -1;
-    const distance = 18 + random() * (kind === 'canyon' ? 58 : 72);
+    const spread = random();
     const height = kind === 'canyon' ? 4 + random() * 7 : kind === 'coast' ? 7 + random() * 8 : 8 + random() * 12;
-    const position = point.clone().addScaledVector(side, distance * direction);
-    position.y -= 1.2 + random() * 4;
+    const drop = 1.2 + random() * 4;
     quaternion.setFromAxisAngle(UP, random() * Math.PI * 2);
-    matrix.compose(position, quaternion, new THREE.Vector3(1, height, 1));
-    trunks.setMatrixAt(index, matrix);
-
-    const crownSlot = index % crowns.length;
-    const crownPosition = position.clone().add(new THREE.Vector3(0, height * (kind === 'coast' ? 0.9 : 0.7), 0));
     const crownScale = kind === 'coast'
       ? new THREE.Vector3(5 + random() * 4, 1, 5 + random() * 4)
       : kind === 'canyon'
         ? new THREE.Vector3(1.3 + random(), 2 + random() * 1.5, 1.3 + random())
         : new THREE.Vector3(2.5 + random() * 2, height * 0.34, 2.5 + random() * 2);
+    // A tree is as wide as its crown; coastal palms reach 9m, so the old fixed
+    // "18m from the centre line" start was well inside the driving corridor.
+    const radius = horizontalRadius(crownGeometry, crownScale);
+    const candidate = clearance.place((attempt) => {
+      const distance = clearance.requiredDistance(radius)
+        + spread * (kind === 'canyon' ? 44 : 58) + attempt * 12;
+      return {
+        x: point.x + side.x * distance * direction,
+        z: point.z + side.z * distance * direction,
+        radius,
+      };
+    }, 6);
+    if (!candidate) continue;
+    const position = new THREE.Vector3(candidate.x, point.y - drop, candidate.z);
+    matrix.compose(position, quaternion, new THREE.Vector3(1, height, 1));
+    trunks.setMatrixAt(placedTrunks, matrix);
+    placedTrunks += 1;
+
+    const crownSlot = index % crowns.length;
+    const crownPosition = position.clone().add(new THREE.Vector3(0, height * (kind === 'coast' ? 0.9 : 0.7), 0));
     matrix.compose(crownPosition, quaternion, crownScale);
     crowns[crownSlot].setMatrixAt(crownIndices[crownSlot], matrix);
     crownIndices[crownSlot] += 1;
   }
+  trunks.count = placedTrunks;
   trunks.castShadow = qualityTier !== 'balanced';
   trunks.receiveShadow = true;
   root.add(trunks);
-  for (const crown of crowns) {
+  for (const [slot, crown] of crowns.entries()) {
+    crown.count = crownIndices[slot];
     crown.castShadow = qualityTier !== 'balanced';
     crown.receiveShadow = true;
     root.add(crown);
   }
 }
 
-function createRockFormations(root, curve, theme, random, qualityTier, kind) {
+function createRockFormations(root, curve, theme, random, qualityTier, kind, clearance) {
   const count = qualityTier === 'balanced' ? 38 : 72;
   const geometry = kind === 'canyon'
     ? new THREE.CylinderGeometry(0.72, 1, 1, 9, 3)
@@ -491,19 +798,36 @@ function createRockFormations(root, curve, theme, random, qualityTier, kind) {
   const side = new THREE.Vector3();
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
+  let placed = 0;
   for (let index = 0; index < count; index += 1) {
     const progress = random();
     trackFrame(curve, progress, point, tangent, side);
     const direction = random() > 0.5 ? 1 : -1;
-    const distance = 42 + random() * 125;
-    const position = point.clone().addScaledVector(side, direction * distance);
-    position.y -= 10 + random() * 14;
+    const spread = random();
+    const drop = 10 + random() * 14;
     quaternion.setFromAxisAngle(UP, random() * Math.PI * 2);
     const width = 7 + random() * (kind === 'canyon' ? 20 : 13);
     const height = kind === 'canyon' ? 20 + random() * 62 : 8 + random() * 26;
-    matrix.compose(position, quaternion, new THREE.Vector3(width, height, width * (0.7 + random() * 0.7)));
-    rocks.setMatrixAt(index, matrix);
+    const scale = new THREE.Vector3(width, height, width * (0.7 + random() * 0.7));
+    // Rocks used to be validated against a single point of the curve, so the
+    // stretch of the loop that came back around could run straight through one.
+    const radius = horizontalRadius(geometry, scale);
+    const candidate = clearance.place((attempt) => {
+      const distance = clearance.requiredDistance(radius, TERRAIN_CLEARANCE) + spread * 92 + attempt * 24;
+      return {
+        x: point.x + side.x * direction * distance,
+        z: point.z + side.z * direction * distance,
+        radius,
+        clearance: TERRAIN_CLEARANCE,
+      };
+    }, 6);
+    if (!candidate) continue;
+    const position = new THREE.Vector3(candidate.x, point.y - drop, candidate.z);
+    matrix.compose(position, quaternion, scale);
+    rocks.setMatrixAt(placed, matrix);
+    placed += 1;
   }
+  rocks.count = placed;
   rocks.castShadow = qualityTier !== 'balanced';
   rocks.receiveShadow = true;
   root.add(rocks);
@@ -536,6 +860,7 @@ function createStartComplex(root, curve, theme) {
   arch.add(lower);
   arch.position.copy(start);
   arch.rotation.y = Math.atan2(tangent.x, tangent.z);
+  markClearanceExempt(arch, CLEARANCE_EXEMPT.FURNITURE);
   root.add(arch);
 
   const startLine = new THREE.Mesh(
@@ -547,6 +872,7 @@ function createStartComplex(root, curve, theme) {
   startLine.position.copy(start);
   startLine.position.y += 0.22;
   startLine.name = `${theme.name}StartLine`;
+  markClearanceExempt(startLine, CLEARANCE_EXEMPT.ROAD);
   root.add(startLine);
   return startLine;
 }
@@ -578,6 +904,7 @@ function createClouds(root, theme, random, qualityTier) {
       index += 1;
     }
   }
+  markClearanceExempt(clouds, CLEARANCE_EXEMPT.BACKDROP);
   root.add(clouds);
   return clouds;
 }
@@ -636,6 +963,7 @@ function createAurora(root) {
   });
   const aurora = new THREE.Mesh(new THREE.PlaneGeometry(760, 250, 60, 12), material);
   aurora.position.set(0, 225, -390);
+  markClearanceExempt(aurora, CLEARANCE_EXEMPT.BACKDROP);
   root.add(aurora);
   return aurora;
 }
@@ -676,11 +1004,12 @@ function createOcean(root) {
   ocean.rotation.x = -Math.PI / 2;
   ocean.position.y = 0;
   ocean.name = 'AzureDynamicOcean';
+  markClearanceExempt(ocean, CLEARANCE_EXEMPT.TERRAIN);
   root.add(ocean);
   return ocean;
 }
 
-function createAlpineLandmark(root, curve, theme) {
+function createAlpineLandmark(root, curve, theme, clearance) {
   const ice = new THREE.Mesh(
     new THREE.CircleGeometry(86, 48),
     new THREE.MeshPhysicalMaterial({ color: 0x83c9dd, roughness: 0.18, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.12 }),
@@ -688,24 +1017,39 @@ function createAlpineLandmark(root, curve, theme) {
   ice.rotation.x = -Math.PI / 2;
   ice.position.set(-40, 10, -35);
   ice.name = 'FrostpeakIceLake';
+  markClearanceExempt(ice, CLEARANCE_EXEMPT.TERRAIN);
   root.add(ice);
 
   const towerMaterial = new THREE.MeshStandardMaterial({ color: 0xabb8bc, metalness: 0.8, roughness: 0.3 });
   const cableMaterial = new THREE.LineBasicMaterial({ color: theme.accent, transparent: true, opacity: 0.5 });
   const cablePoints = [];
+  const point = new THREE.Vector3();
+  const tangent = new THREE.Vector3();
+  const side = new THREE.Vector3();
+  const towerRadius = Math.hypot(0.6, 0.6);
   for (let index = 0; index < 6; index += 1) {
     const progress = 0.18 + index * 0.09;
-    const point = curve.getPointAt(progress);
+    // The pylons used to be offset by a fixed world-space +X of 28m, which drops
+    // them onto the road wherever the circuit happens to run east-west. They now
+    // step out along the track normal, away from the infield.
+    trackFrame(curve, progress, point, tangent, side);
+    const outward = clearance.outwardSign(point, side);
+    const distance = clearance.requiredDistance(towerRadius) + 6;
+    const x = point.x + side.x * outward * distance;
+    const z = point.z + side.z * outward * distance;
+    if (!clearance.clears(x, z, towerRadius)) continue;
     const tower = new THREE.Mesh(new THREE.BoxGeometry(1.2, 20, 1.2), towerMaterial);
-    tower.position.copy(point).add(new THREE.Vector3(28, 8, 0));
+    tower.position.set(x, point.y + 8, z);
     tower.castShadow = true;
     root.add(tower);
     cablePoints.push(tower.position.clone().add(new THREE.Vector3(0, 10, 0)));
   }
-  root.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(cablePoints), cableMaterial));
+  if (cablePoints.length > 1) {
+    root.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(cablePoints), cableMaterial));
+  }
 }
 
-function createCanyonLandmark(root, theme) {
+function createCanyonLandmark(root, theme, clearance) {
   const material = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.9, flatShading: true });
   applyPbr(material, 'dark_rock', [2, 2]);
   const arch = new THREE.Mesh(new THREE.TorusGeometry(30, 9, 10, 36, Math.PI), material);
@@ -713,16 +1057,18 @@ function createCanyonLandmark(root, theme) {
   arch.position.set(-58, 62, 70);
   arch.scale.z = 0.64;
   arch.castShadow = true;
-  root.add(arch);
+  // Hand-placed landmarks are validated too, so a future track edit that runs
+  // the circuit past them fails the clearance test instead of the player.
+  if (clearance.clears(arch.position.x, arch.position.z, 39, TERRAIN_CLEARANCE)) root.add(arch);
 
   const monolith = new THREE.Mesh(new THREE.CylinderGeometry(12, 23, 118, 8, 4), material);
   monolith.position.set(110, 48, -168);
   monolith.castShadow = true;
   monolith.receiveShadow = true;
-  root.add(monolith);
+  if (clearance.clears(monolith.position.x, monolith.position.z, 23, TERRAIN_CLEARANCE)) root.add(monolith);
 }
 
-function createCoastLandmark(root, theme) {
+function createCoastLandmark(root, theme, clearance) {
   const white = new THREE.MeshStandardMaterial({ color: 0xf1efe3, roughness: 0.72 });
   const red = new THREE.MeshStandardMaterial({ color: 0xc74343, roughness: 0.55 });
   const glass = new THREE.MeshStandardMaterial({ color: theme.accent, emissive: theme.accent, emissiveIntensity: 2.2, roughness: 0.18 });
@@ -738,7 +1084,11 @@ function createCoastLandmark(root, theme) {
   roof.position.y = 43.5;
   lighthouse.add(tower, stripe, lantern, roof);
   lighthouse.position.set(-172, 34, -44);
-  root.add(lighthouse);
+  // Same validation as the other hand-placed landmarks: the lighthouse only
+  // goes in if its footprint stays out of the driving corridor.
+  if (clearance.clears(lighthouse.position.x, lighthouse.position.z, 6.5, TERRAIN_CLEARANCE)) {
+    root.add(lighthouse);
+  }
 
   const beam = new THREE.SpotLight(theme.accent, 115, 260, 0.13, 0.5, 1.3);
   beam.position.copy(lighthouse.position).add(new THREE.Vector3(0, 39, 0));
@@ -765,11 +1115,25 @@ function addLights(root, theme, qualityTier) {
   return sun;
 }
 
+/**
+ * Builds one of the three scenic maps.
+ *
+ * `options`:
+ *   - `qualityTier`: 'balanced' | 'high' (unchanged).
+ *   - `shortcutZones`: optional `[{ start, end, side, halfWidth, points }]`.
+ *     `start`/`end`/`side` punch an opening in the guardrail for a shortcut
+ *     mouth (start > end wraps past the start/finish line, side 1 = positive
+ *     lateral). `points` (the shortcut centre line, world space) plus
+ *     `halfWidth` additionally reserve that branch as a no-scenery corridor.
+ *     Omitting the option keeps the map exactly as it was.
+ */
 export function createScenicWorld(scene, trackId, options = {}) {
   const curve = SCENIC_TRACK_CURVES[trackId];
   const theme = THEMES[trackId];
   if (!curve || !theme) throw new Error(`Unknown scenic track: ${trackId}`);
   const qualityTier = options.qualityTier === 'balanced' ? 'balanced' : 'high';
+  const shortcuts = createShortcutMask(options.shortcutZones);
+  const clearance = createClearanceField(curve, { shortcutZones: options.shortcutZones });
   const random = seededRandom(theme.seed);
   const world = new THREE.Group();
   world.name = theme.name;
@@ -779,10 +1143,10 @@ export function createScenicWorld(scene, trackId, options = {}) {
 
   createSky(world, theme);
   addLights(world, theme, qualityTier);
-  const ground = createGround(world, theme, random, qualityTier);
-  const road = createRoad(world, curve, theme, qualityTier);
-  createRockFormations(world, curve, theme, random, qualityTier, trackId);
-  createTracksideVegetation(world, curve, theme, random, qualityTier, trackId);
+  const ground = createGround(world, theme, random, qualityTier, curve, clearance);
+  const road = createRoad(world, curve, theme, qualityTier, shortcuts);
+  createRockFormations(world, curve, theme, random, qualityTier, trackId, clearance);
+  createTracksideVegetation(world, curve, theme, random, qualityTier, trackId, clearance);
   const startLine = createStartComplex(world, curve, theme);
   const clouds = createClouds(world, theme, random, qualityTier);
   let weather = null;
@@ -793,13 +1157,13 @@ export function createScenicWorld(scene, trackId, options = {}) {
   if (trackId === 'alpine') {
     weather = createWeather(world, 'snow', random, qualityTier);
     aurora = createAurora(world);
-    createAlpineLandmark(world, curve, theme);
+    createAlpineLandmark(world, curve, theme, clearance);
   } else if (trackId === 'canyon') {
     weather = createWeather(world, 'dust', random, qualityTier);
-    createCanyonLandmark(world, theme);
+    createCanyonLandmark(world, theme, clearance);
   } else {
     ocean = createOcean(world);
-    coastLandmark = createCoastLandmark(world, theme);
+    coastLandmark = createCoastLandmark(world, theme, clearance);
   }
 
   return {

@@ -5,6 +5,13 @@ import {
   matrixOnTrack,
   tangentFrame,
 } from './night-track.js';
+import {
+  CLEARANCE_EXEMPT,
+  PROP_CLEARANCE,
+  createShortcutMask,
+  horizontalRadius,
+  markClearanceExempt,
+} from './scenic-worlds.js';
 
 export function createHarborDistrict(root, random, helpers) {
   const { applyEnvironmentPbr, createContainerDecalTexture, createHarborSignTexture, createRoadReflectionTexture } = helpers;
@@ -415,6 +422,11 @@ export function createHarborDistrict(root, random, helpers) {
   quayGate.scale.multiplyScalar(1.22);
   harbor.add(quayGate);
 
+  // The harbour is authored around the roadway: every prop here is placed with
+  // matrixOnTrack (containers, bollards, poles, signage, the gate that straddles
+  // the road) or sits out on the quay behind them. It is track furniture as far
+  // as the scenery-clearance test is concerned.
+  markClearanceExempt(harbor, CLEARANCE_EXEMPT.FURNITURE);
   root.add(harbor);
   return harbor;
 }
@@ -451,11 +463,24 @@ export function createHarborBridge(root, helpers) {
   piers.receiveShadow = true;
   // The main road ribbon already forms the deck; piers provide depth without chord segments piercing bends.
   bridge.add(piers);
+  markClearanceExempt(bridge, CLEARANCE_EXEMPT.FURNITURE);
   root.add(bridge);
 }
 
-export function createMountainRoad(root, random, helpers) {
+/**
+ * Mountain pass district.
+ *
+ * `options`:
+ *   - `clearance`: shared clearance field (see scenic-worlds.js). Cliff boulders
+ *     are only placed where they clear the circuit and any shortcut branch.
+ *   - `shortcuts`: shortcut mask; the concrete wall and its chevrons leave a gap
+ *     at a shortcut mouth. Both default to "no zones, validate against nothing
+ *     extra", which reproduces the original layout rules.
+ */
+export function createMountainRoad(root, random, helpers, options = {}) {
   const { applyEnvironmentPbr } = helpers;
+  const clearance = options.clearance ?? null;
+  const shortcuts = options.shortcuts ?? createShortcutMask(null);
   const mountainRoad = new THREE.Group();
   mountainRoad.name = 'District_MountainPass';
   const wallMaterial = applyEnvironmentPbr(
@@ -476,30 +501,58 @@ export function createMountainRoad(root, random, helpers) {
   const cliffs = new THREE.InstancedMesh(rockGeometry, rockMaterial, cliffCount);
   const dummy = new THREE.Object3D();
   const rockColor = new THREE.Color();
+  let placedWalls = 0;
+  let placedCliffs = 0;
 
   for (let i = 0; i < wallCount; i += 1) {
     const t = 0.63 + (i / wallCount) * 0.275;
     const outside = Math.sin(t * Math.PI * 18) > 0 ? 1 : -1;
-    walls.setMatrixAt(i, matrixOnTrack(t, outside * (ROAD_WIDTH / 2 + 2.5), 1.45));
+    // A shortcut mouth on this side of the pass leaves the wall open.
+    if (shortcuts.isOpen(t, outside)) continue;
+    walls.setMatrixAt(placedWalls, matrixOnTrack(t, outside * (ROAD_WIDTH / 2 + 2.5), 1.45));
+    placedWalls += 1;
   }
+  walls.count = placedWalls;
   for (let i = 0; i < cliffCount; i += 1) {
     const t = 0.625 + random() * 0.29;
     const { point, side } = tangentFrame(t);
-    const lateral = (random() > 0.46 ? 1 : -1) * (24 + random() * 35);
-    const base = point.clone().addScaledVector(side, lateral);
+    const direction = random() > 0.46 ? 1 : -1;
+    const spread = random();
     const size = 3 + random() * 9;
-    dummy.position.set(base.x, point.y + size * (0.15 + random() * 0.55), base.z);
-    dummy.scale.set(size * (0.7 + random() * 0.6), size, size * (0.55 + random() * 0.65));
-    dummy.rotation.set(random() * Math.PI, random() * Math.PI, random() * Math.PI);
+    const scale = new THREE.Vector3(size * (0.7 + random() * 0.6), size, size * (0.55 + random() * 0.65));
+    const lift = random();
+    const spinX = random() * Math.PI;
+    const spinY = random() * Math.PI;
+    const spinZ = random() * Math.PI;
+    const shade = random();
+    // Boulders used to start 24m out while measuring up to 15m across, so the
+    // biggest ones bit into the pass. They now clear the whole circuit.
+    const radius = horizontalRadius(rockGeometry, scale);
+    const placement = clearance
+      ? clearance.place((attempt) => {
+        const distance = clearance.requiredDistance(radius, PROP_CLEARANCE) + spread * 35 + attempt * 13;
+        const candidate = point.clone().addScaledVector(side, distance * direction);
+        return { x: candidate.x, z: candidate.z, radius, base: candidate };
+      }, 6)
+      : { base: point.clone().addScaledVector(side, (24 + spread * 35) * direction) };
+    if (!placement) continue;
+    const base = placement.base;
+    dummy.position.set(base.x, point.y + size * (0.15 + lift * 0.55), base.z);
+    dummy.scale.copy(scale);
+    dummy.rotation.set(spinX, spinY, spinZ);
     dummy.updateMatrix();
-    cliffs.setMatrixAt(i, dummy.matrix);
-    rockColor.setHSL(0.47, 0.06 + random() * 0.07, 0.42 + random() * 0.13);
-    cliffs.setColorAt(i, rockColor);
+    cliffs.setMatrixAt(placedCliffs, dummy.matrix);
+    rockColor.setHSL(0.47, 0.06 + shade * 0.07, 0.42 + random() * 0.13);
+    cliffs.setColorAt(placedCliffs, rockColor);
+    placedCliffs += 1;
   }
+  cliffs.count = placedCliffs;
   walls.castShadow = true;
   walls.receiveShadow = true;
   cliffs.castShadow = true;
   cliffs.receiveShadow = true;
+  walls.userData.guardrail = true;
+  markClearanceExempt(walls, CLEARANCE_EXEMPT.FURNITURE);
   mountainRoad.add(walls, cliffs);
 
   const chevronCount = 54;
@@ -508,11 +561,16 @@ export function createMountainRoad(root, random, helpers) {
     new THREE.MeshBasicMaterial({ color: 0xffb045, toneMapped: false }),
     chevronCount,
   );
+  let placedChevrons = 0;
   for (let i = 0; i < chevronCount; i += 1) {
     const t = 0.64 + (i / chevronCount) * 0.27;
     const outside = Math.sin(t * Math.PI * 18) > 0 ? 1 : -1;
-    chevrons.setMatrixAt(i, matrixOnTrack(t, outside * (ROAD_WIDTH / 2 + 1.75), 1.35));
+    if (shortcuts.isOpen(t, outside)) continue;
+    chevrons.setMatrixAt(placedChevrons, matrixOnTrack(t, outside * (ROAD_WIDTH / 2 + 1.75), 1.35));
+    placedChevrons += 1;
   }
+  chevrons.count = placedChevrons;
+  markClearanceExempt(chevrons, CLEARANCE_EXEMPT.FURNITURE);
   mountainRoad.add(chevrons);
   root.add(mountainRoad);
 }

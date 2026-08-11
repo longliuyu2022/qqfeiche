@@ -92,44 +92,74 @@
       </div>
 
       <section id="homeMenu" class="home-screen" aria-label="游戏首页">
+        <div class="home-backdrop" aria-hidden="true"></div>
+        <div class="home-scrim" aria-hidden="true"></div>
         <div class="home-content">
-          <span id="homeKicker" class="home-kicker">NIGHT CIRCUIT 01</span>
-          <div class="home-lockup">
-            <span class="home-mark">NA</span>
-            <div>
-              <h1>NEON APEX</h1>
-              <p id="homeTrackSubtitle">夜港极速</p>
+          <header class="home-head">
+            <div class="home-lockup">
+              <span class="home-mark" aria-hidden="true">NA</span>
+              <div class="home-titles">
+                <span id="homeKicker" class="home-kicker">NIGHT CIRCUIT 01</span>
+                <h1>NEON APEX</h1>
+                <p id="homeTrackSubtitle">夜港极速</p>
+              </div>
             </div>
-          </div>
-          <div id="trackSelector" class="track-selector" role="tablist" aria-label="赛道地图">
-            <button class="active" data-track="night" type="button" role="tab" aria-selected="true"><span class="track-swatch night" aria-hidden="true"></span><strong>夜港</strong><small>雨夜城市</small></button>
-            <button data-track="day" type="button" role="tab" aria-selected="false"><span class="track-swatch day" aria-hidden="true"></span><strong>晴川</strong><small>白昼山谷</small></button>
-            <button data-track="alpine" type="button" role="tab" aria-selected="false"><span class="track-swatch alpine" aria-hidden="true"></span><strong>雪岭极光</strong><small>极地雪峰</small></button>
-            <button data-track="canyon" type="button" role="tab" aria-selected="false"><span class="track-swatch canyon" aria-hidden="true"></span><strong>赤砂峡谷</strong><small>落日岩谷</small></button>
-            <button data-track="coast" type="button" role="tab" aria-selected="false"><span class="track-swatch coast" aria-hidden="true"></span><strong>蔚蓝海岸</strong><small>临海悬崖</small></button>
-          </div>
-          <div id="modeSelector" class="mode-selector" role="tablist" aria-label="赛事模式">
-            <button class="active" data-race-mode="race" type="button" role="tab" aria-selected="true"><strong>竞速</strong><small>3 圈</small></button>
-            <button data-race-mode="items" type="button" role="tab" aria-selected="false"><strong>道具</strong><small>对战</small></button>
-            <button data-race-mode="timeTrial" type="button" role="tab" aria-selected="false"><strong>计时</strong><small>单圈</small></button>
-            <button data-race-mode="drift" type="button" role="tab" aria-selected="false"><strong>漂移</strong><small>单圈</small></button>
-          </div>
-          <div id="garageSelector" class="garage-selector" role="tablist" aria-label="车库选车"></div>
-          <div class="home-event">
-            <span id="homeEventMeta">HARBOR CITY // 23:48</span>
-            <strong id="homeEventTitle">天际线大奖赛</strong>
-            <small id="homeEventRules">3 LAPS // 6 RACERS</small>
-          </div>
-          <dl class="home-records" aria-label="本地生涯记录">
-            <div><dt id="homeBestLabel">PERSONAL BEST</dt><dd id="homeBest">--:--.---</dd></div>
-            <div><dt>RANK</dt><dd id="homeRank">青铜 III · 0分</dd></div>
-            <div><dt>RACES</dt><dd id="homeRaces">0</dd></div>
-            <div><dt>WINS</dt><dd id="homeWins">0</dd></div>
-          </dl>
+            <div class="home-status-bar" aria-label="车手状态">
+              <div class="status-chip status-rank">
+                <span>RANK</span>
+                <b id="homeRank">青铜 III · 0分</b>
+              </div>
+              <div class="status-chip status-coins">
+                <span>COINS</span>
+                <i class="coin-icon" aria-hidden="true"></i>
+                <b id="homeCoins">0</b>
+              </div>
+            </div>
+          </header>
+
+          <section class="home-panel home-panel-select" aria-label="赛道与模式">
+            <div class="panel-head"><b>赛道</b><span>TRACK SELECT</span></div>
+            <div id="trackSelector" class="track-selector" role="tablist" aria-label="赛道地图">
+              <button class="active" data-track="night" type="button" role="tab" aria-selected="true"><span class="track-swatch night" aria-hidden="true"></span><strong>夜港</strong><small>雨夜城市</small></button>
+              <button data-track="day" type="button" role="tab" aria-selected="false"><span class="track-swatch day" aria-hidden="true"></span><strong>晴川</strong><small>白昼山谷</small></button>
+              <button data-track="alpine" type="button" role="tab" aria-selected="false"><span class="track-swatch alpine" aria-hidden="true"></span><strong>雪岭极光</strong><small>极地雪峰</small></button>
+              <button data-track="canyon" type="button" role="tab" aria-selected="false"><span class="track-swatch canyon" aria-hidden="true"></span><strong>赤砂峡谷</strong><small>落日岩谷</small></button>
+              <button data-track="coast" type="button" role="tab" aria-selected="false"><span class="track-swatch coast" aria-hidden="true"></span><strong>蔚蓝海岸</strong><small>临海悬崖</small></button>
+            </div>
+            <div class="panel-head"><b>模式</b><span>RACE MODE</span></div>
+            <div id="modeSelector" class="mode-selector" role="tablist" aria-label="赛事模式">
+              <button class="active" data-race-mode="race" type="button" role="tab" aria-selected="true"><strong>竞速</strong><small>3 圈</small></button>
+              <button data-race-mode="items" type="button" role="tab" aria-selected="false"><strong>道具</strong><small>对战</small></button>
+              <button data-race-mode="timeTrial" type="button" role="tab" aria-selected="false"><strong>计时</strong><small>单圈</small></button>
+              <button data-race-mode="drift" type="button" role="tab" aria-selected="false"><strong>漂移</strong><small>单圈</small></button>
+            </div>
+          </section>
+
+          <section class="home-panel home-panel-brief" aria-label="赛事简报">
+            <div class="home-event">
+              <span id="homeEventMeta">HARBOR CITY // 23:48</span>
+              <strong id="homeEventTitle">天际线大奖赛</strong>
+              <small id="homeEventRules">3 LAPS // 6 RACERS</small>
+            </div>
+            <dl class="home-records" aria-label="本地生涯记录">
+              <div><dt id="homeBestLabel">PERSONAL BEST</dt><dd id="homeBest">--:--.---</dd></div>
+              <div><dt>RACES</dt><dd id="homeRaces">0</dd></div>
+              <div><dt>WINS</dt><dd id="homeWins">0</dd></div>
+            </dl>
+          </section>
+
+          <section class="home-panel home-panel-garage" aria-label="车库">
+            <div class="panel-head"><b>车库</b><span>GARAGE</span></div>
+            <div id="garageSelector" class="garage-selector" role="tablist" aria-label="车库选车"></div>
+          </section>
+
           <div class="home-actions">
             <button id="startRace" class="home-start" type="button"><span aria-hidden="true"></span>开始比赛</button>
-            <button id="openMultiplayer" class="home-online" type="button">联机</button>
-            <button id="openSettings" class="home-settings" type="button">设置</button>
+            <div class="home-sub-actions">
+              <button id="openMultiplayer" class="home-online" type="button">联机</button>
+              <button id="openShop" class="home-shop" type="button">商店</button>
+              <button id="openSettings" class="home-settings" type="button">设置</button>
+            </div>
           </div>
         </div>
       </section>
@@ -178,6 +208,25 @@
         </div>
       </div>
 
+      <div id="shopMenu" class="modal shop-modal" hidden>
+        <div class="modal-content">
+          <span class="modal-kicker">NEON GARAGE STORE</span>
+          <h1>改装商店</h1>
+          <div class="shop-header">
+            <span>金币余额</span>
+            <b class="coin-value"><i class="coin-icon" aria-hidden="true"></i><em id="shopCoins">0</em></b>
+          </div>
+          <div id="shopTabs" class="shop-tabs" role="tablist" aria-label="商品分类">
+            <button class="active" data-shop-tab="car" type="button" role="tab" aria-selected="true">车辆</button>
+            <button data-shop-tab="paint" type="button" role="tab" aria-selected="false">车漆</button>
+            <button data-shop-tab="decal" type="button" role="tab" aria-selected="false">贴花</button>
+          </div>
+          <div id="shopGrid" class="shop-grid" aria-label="商品列表"></div>
+          <p id="shopStatus" class="shop-status" aria-live="polite">赢得比赛获取金币，解锁新车与外观</p>
+          <button id="closeShop" class="modal-close" type="button" aria-label="关闭" title="关闭">&#x00D7;</button>
+        </div>
+      </div>
+
       <div id="loading" class="loading-screen done" style="display: none">
         <div class="loading-brand"><span>NA</span></div>
         <p>NEON APEX</p>
@@ -213,6 +262,9 @@
             <span>排位段位</span>
             <b id="resultRankLabel">青铜 III</b>
             <em id="resultRankDelta">+0</em>
+          </div>
+          <div id="resultCoinsRow" class="coins-strip" hidden>
+            <span>本场奖励</span><b id="resultCoins">+0</b>
           </div>
           <button id="raceAgain" class="primary-action" type="button">再次比赛</button>
           <button id="resultHome" class="secondary-action" type="button">返回首页</button>

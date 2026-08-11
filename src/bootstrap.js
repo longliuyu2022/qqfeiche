@@ -6,11 +6,13 @@ import { MultiplayerClient } from './multiplayer-client.js';
 import { TRACK_CATALOG, normalizeTrackId } from './track-catalog.js';
 import { CAR_CATALOG, getCarById } from './car-catalog.js';
 import { formatRank, getRankTier, loadRankState } from './ranked.js';
+import { isOwned, loadWallet } from './shop.js';
+import { createShopUi } from './shop-ui.js';
 
 const ui = Object.fromEntries([
-  'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeKicker', 'homeRank',
+  'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeKicker', 'homeRank', 'homeCoins',
   'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'homeTrackSubtitle', 'trackSelector', 'garageSelector',
-  'startRace', 'openMultiplayer',
+  'startRace', 'openMultiplayer', 'openShop',
   'openSettings', 'settingsMenu', 'closeSettings', 'soundEnabled',
   'masterVolume', 'volumeValue', 'qualitySetting', 'vibrationEnabled',
   'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'ghostEnabled',
@@ -22,6 +24,7 @@ const ui = Object.fromEntries([
 
 let preferences = loadPreferences();
 const raceRecords = loadRaceRecords();
+let wallet = loadWallet();
 let selectedMode = preferences.lastMode;
 let selectedTrack = normalizeTrackId(preferences.lastTrack);
 let selectedCarId = getCarById(preferences.carId).id;
@@ -73,9 +76,11 @@ function revealSelectedTrack(button) {
 function renderGarage() {
   if (!ui.garageSelector) return;
   const buttons = CAR_CATALOG.map((car) => {
+    const owned = isOwned(wallet, car.id);
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.car = car.id;
+    button.dataset.owned = String(owned);
     button.setAttribute('role', 'tab');
     const selected = car.id === selectedCarId;
     button.classList.toggle('active', selected);
@@ -84,11 +89,11 @@ function renderGarage() {
     button.style.setProperty('--car-accent', car.accentColor);
     const chip = document.createElement('span');
     chip.className = 'car-chip';
-    chip.textContent = car.carClass;
+    chip.textContent = owned ? car.carClass : '锁';
     const name = document.createElement('strong');
     name.textContent = car.name;
     const flavor = document.createElement('small');
-    flavor.textContent = car.flavor;
+    flavor.textContent = owned ? car.flavor : '前往商店解锁';
     const stats = document.createElement('span');
     stats.className = 'car-stats';
     for (const [label, value] of [['速', car.stats.topSpeed], ['集', car.stats.charge], ['控', car.stats.handling]]) {
@@ -109,9 +114,18 @@ function renderGarage() {
 
 function selectCar(carId) {
   if (!bootstrapActive || !getCarById(carId) || multiplayer?.room) return;
-  selectedCarId = getCarById(carId).id;
+  const car = getCarById(carId);
+  if (!isOwned(wallet, car.id)) {
+    shopUi?.open();
+    return;
+  }
+  selectedCarId = car.id;
   preferences = savePreferences({ ...preferences, carId: selectedCarId });
   renderGarage();
+}
+
+function renderWallet() {
+  if (ui.homeCoins) ui.homeCoins.textContent = Number(wallet.coins || 0).toLocaleString('en-US');
 }
 
 function renderRankBadge() {
@@ -148,8 +162,18 @@ function renderHome() {
   ui.homeRaces.textContent = String(raceRecords.modeRaces[selectedMode] ?? 0);
   ui.homeWins.textContent = String(raceRecords.wins);
   renderRankBadge();
+  renderWallet();
   document.body.dataset.track = selectedTrack;
 }
+
+const shopUi = createShopUi({
+  getWallet: () => wallet,
+  setWallet: (next) => { wallet = next; },
+  onChange: () => {
+    renderWallet();
+    renderGarage();
+  },
+});
 
 function selectMode(modeId) {
   if (!bootstrapActive || !RACE_MODES[modeId]) return;
@@ -358,6 +382,7 @@ ui.startOnlineRace.addEventListener('click', () => multiplayer?.startRace());
 ui.leaveRoom.addEventListener('click', () => multiplayer?.leave());
 ui.openSettings.addEventListener('click', () => setSettingsVisible(true));
 ui.closeSettings.addEventListener('click', () => setSettingsVisible(false));
+ui.openShop?.addEventListener('click', () => shopUi.open());
 ui.soundEnabled.addEventListener('change', () => applyPreferences({ soundEnabled: ui.soundEnabled.checked }));
 ui.masterVolume.addEventListener('input', () => applyPreferences({ masterVolume: Number(ui.masterVolume.value) }));
 ui.musicEnabled.addEventListener('change', () => applyPreferences({ musicEnabled: ui.musicEnabled.checked }));
@@ -369,6 +394,10 @@ ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibratio
 ui.cameraShakeEnabled.addEventListener('change', () => applyPreferences({ cameraShake: ui.cameraShakeEnabled.checked }));
 window.addEventListener('keydown', (event) => {
   if (!bootstrapActive) return;
+  if (shopUi.visible) {
+    if (event.code === 'Escape') shopUi.close();
+    return;
+  }
   if (!ui.settingsMenu.hidden) {
     if (event.code === 'Escape') setSettingsVisible(false);
     return;
@@ -386,6 +415,10 @@ window.addEventListener('keydown', (event) => {
 
 window.__NEON_APEX_ANDROID_BACK__ = () => {
   if (!bootstrapActive) return false;
+  if (shopUi.visible) {
+    shopUi.close();
+    return true;
+  }
   if (!ui.settingsMenu.hidden) {
     setSettingsVisible(false);
     return true;

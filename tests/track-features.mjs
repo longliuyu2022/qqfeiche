@@ -192,11 +192,83 @@ const custom = computeTrackFeatures(TRACK_CURVE, { trackId: 'night', padCount: 3
 assert.equal(custom.boostPads.length, 3);
 assert.equal(custom.ramps.length, 1);
 
-assert.deepEqual(featureZonesForPhysics(null), { pads: [], ramps: [] });
+assert.deepEqual(featureZonesForPhysics(null), { pads: [], ramps: [], shortcuts: [] });
 assert.equal(rampHeightAt(null, 0.5), 0);
 assert.equal(rampHeightAt({ start: 0.4, end: 0.4, height: 2.5 }, 0.4), 0, 'degenerate zone must be inert');
+
+const noShortcuts = computeTrackFeatures(TRACK_CURVE, { trackId: 'night', shortcutCount: 0 });
+assert.equal(noShortcuts.shortcuts.length, 0, 'shortcutCount 0 must disable branches');
+
+const shortcutSummary = {};
+for (const [trackId, curve] of Object.entries(curves)) {
+  const layout = computeTrackFeatures(curve, { trackId, roadWidth: ROAD_WIDTH });
+  const zones = featureZonesForPhysics(layout).shortcuts;
+  assert.equal(layout.shortcuts.length, 1, `${trackId} should offer one shortcut`);
+  const shortcut = layout.shortcuts[0];
+  const zone = zones[0];
+
+  assert.ok(shortcut.progress > 0 && shortcut.endProgress < 1, `${trackId} shortcut must not wrap t=0`);
+  assert.ok(shortcut.endProgress > shortcut.progress, `${trackId} shortcut span must be ordered`);
+  assert.ok(shortcut.savedMeters >= 12, `${trackId} shortcut must save a meaningful distance`);
+  assert.ok(shortcut.pathLength < shortcut.savedMeters + (shortcut.endProgress - shortcut.progress) * layout.trackLength);
+  assert.ok(shortcut.maxDeviation <= 52, `${trackId} shortcut must stay inside the reserved corridor`);
+  assert.ok(shortcut.side === 1 || shortcut.side === -1, `${trackId} shortcut needs a branch side`);
+  assert.equal(zone.points.length, shortcut.points.length);
+  assert.ok(zone.points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.z)));
+
+  // The branch must start and finish on the drivable road it forks from, so a
+  // car hugging that shoulder can flow into and out of it without a jump.
+  const entryPoint = curve.getPointAt(shortcut.progress);
+  const exitPoint = curve.getPointAt(shortcut.endProgress);
+  const first = shortcut.points[0];
+  const last = shortcut.points.at(-1);
+  const entryOffset = Math.hypot(first.x - entryPoint.x, first.z - entryPoint.z);
+  const exitOffset = Math.hypot(last.x - exitPoint.x, last.z - exitPoint.z);
+  assert.ok(entryOffset <= ROAD_WIDTH / 2, `${trackId} branch must fork from the road (got ${entryOffset.toFixed(1)}m)`);
+  assert.ok(exitOffset <= ROAD_WIDTH / 2, `${trackId} branch must rejoin onto the road (got ${exitOffset.toFixed(1)}m)`);
+  assert.ok(entryOffset > 2, `${trackId} branch mouth must sit off the centre line`);
+
+  // It must not graze an unrelated part of the loop.
+  let minForeignDistance = Infinity;
+  for (const point of shortcut.points) {
+    const deviation = Math.hypot(point.x - entryPoint.x, point.z - entryPoint.z);
+    if (deviation < 22) continue;
+    for (let sample = 0; sample < 400; sample += 1) {
+      const t = sample / 400;
+      const inSpan = t >= shortcut.progress - 0.06 && t <= shortcut.endProgress + 0.06;
+      if (inSpan) continue;
+      const linePoint = curve.getPointAt(t);
+      minForeignDistance = Math.min(minForeignDistance, Math.hypot(point.x - linePoint.x, point.z - linePoint.z));
+    }
+  }
+  assert.ok(
+    minForeignDistance >= 22,
+    `${trackId} shortcut must not cross another part of the track (min ${minForeignDistance.toFixed(1)}m)`,
+  );
+
+  const repeat = computeTrackFeatures(curve, { trackId, roadWidth: ROAD_WIDTH });
+  assert.deepEqual(
+    repeat.shortcuts.map((entry) => [entry.progress, entry.endProgress, entry.side]),
+    layout.shortcuts.map((entry) => [entry.progress, entry.endProgress, entry.side]),
+    `${trackId} shortcut placement must be deterministic`,
+  );
+
+  shortcutSummary[trackId] = {
+    span: [Number(shortcut.progress.toFixed(3)), Number(shortcut.endProgress.toFixed(3))],
+    side: shortcut.side,
+    deviation: Number(shortcut.maxDeviation.toFixed(1)),
+    saved: Number(shortcut.savedMeters.toFixed(1)),
+  };
+}
 
 const fallbackGroup = buildTrackFeatureMeshes(nightLayout, { theme: 'unknown-theme' });
 assert.equal(fallbackGroup.userData.theme, 'night', 'unknown themes must fall back to night');
 
-console.log(JSON.stringify({ status: 'track features ok', tracks: summary }));
+const shortcutGroup = buildTrackFeatureMeshes(nightLayout, { theme: 'night' });
+assert.ok(
+  shortcutGroup.children.some((child) => child.name === 'ShortcutDecks'),
+  'a track with a shortcut must render its branch road',
+);
+assert.ok(shortcutGroup.children.length <= 12, 'feature meshes must stay inside the draw call budget');
+
+console.log(JSON.stringify({ status: 'track features ok', tracks: summary, shortcuts: shortcutSummary }));

@@ -40,6 +40,8 @@ const DEFAULTS = Object.freeze({
   checkpointGatePadding: 1.8,
   shortcutTolerance: 0.018,
   shortcutRespawnDelay: 0.9,
+  shortcutEntryOffset: 3,
+  shortcutEntryWindow: 0.06,
   crashRespawnSpeed: 28,
   crashHeadOnRatio: 0.98,
   wrongWayRespawnTime: 4,
@@ -166,6 +168,9 @@ export class ArcadeVehicle {
     this._airTime = 0;
     this._justLanded = 0;
     this._lastMiniBoostAt = -Infinity;
+    this._activeShortcut = null;
+    this._shortcutProgress = 0;
+    this._shortcutSampleScratch = this._createTrackSample();
 
     this.state = {
       speedMps: 0,
@@ -229,6 +234,8 @@ export class ArcadeVehicle {
       airTime: 0,
       padBoostTime: 0,
       launchQuality: null,
+      onShortcut: false,
+      shortcutId: null,
       raceStatus: 'idle',
       result: null,
       position: this.position,
@@ -329,19 +336,143 @@ export class ArcadeVehicle {
     };
   }
 
-  /**
-   * Registers boost pad and ramp zones produced by featureZonesForPhysics().
-   * Zones use progress fractions in [0, 1] with start < end (no wrap).
-   */
   setTrackFeatures(zones) {
-    const hasZones = Boolean(zones && (zones.pads?.length || zones.ramps?.length));
+    const hasZones = Boolean(zones && (zones.pads?.length || zones.ramps?.length || zones.shortcuts?.length));
     this._featureZones = hasZones
-      ? { pads: [...(zones.pads ?? [])], ramps: [...(zones.ramps ?? [])] }
+      ? {
+        pads: [...(zones.pads ?? [])],
+        ramps: [...(zones.ramps ?? [])],
+        shortcuts: (zones.shortcuts ?? []).map((shortcut) => this._buildShortcutPath(shortcut)).filter(Boolean),
+      }
       : null;
     this._padCooldowns.clear();
     this._activeRampId = null;
     this._rampExtra = 0;
+    this._activeShortcut = null;
+    this._shortcutProgress = 0;
+    this.state.onShortcut = false;
+    this.state.shortcutId = null;
     return this;
+  }
+
+  /** Precomputes segment lengths so shortcut sampling stays allocation-free. */
+  _buildShortcutPath(shortcut) {
+    const points = (shortcut?.points ?? [])
+      .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.z))
+      .map((point) => new THREE.Vector3(point.x, point.y ?? 0, point.z));
+    if (points.length < 2) return null;
+    const segments = [];
+    let length = 0;
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const start = points[index];
+      const end = points[index + 1];
+      const dx = end.x - start.x;
+      const dz = end.z - start.z;
+      const segmentLength = Math.hypot(dx, dz);
+      if (segmentLength < EPSILON) continue;
+      segments.push({
+        start,
+        end,
+        length: segmentLength,
+        distanceAtStart: length,
+        tangent: new THREE.Vector3(dx / segmentLength, 0, dz / segmentLength),
+      });
+      length += segmentLength;
+    }
+    if (!segments.length) return null;
+    return {
+      id: shortcut.id ?? 'shortcut',
+      start: shortcut.start,
+      end: shortcut.end,
+      side: shortcut.side ?? 1,
+      halfWidth: Math.max(3, shortcut.halfWidth ?? 5),
+      savedMeters: shortcut.savedMeters ?? 0,
+      points,
+      segments,
+      length,
+    };
+  }
+
+  /** Nearest point on a shortcut path: local 0..1 progress plus lateral offset. */
+  _sampleShortcut(shortcut, position, target = this._shortcutSampleScratch) {
+    let bestScore = Infinity;
+    let best = null;
+    for (const segment of shortcut.segments) {
+      const dx = segment.end.x - segment.start.x;
+      const dz = segment.end.z - segment.start.z;
+      const lengthSquared = dx * dx + dz * dz;
+      const t = THREE.MathUtils.clamp(
+        ((position.x - segment.start.x) * dx + (position.z - segment.start.z) * dz) / lengthSquared,
+        0,
+        1,
+      );
+      const x = segment.start.x + dx * t;
+      const z = segment.start.z + dz * t;
+      const xDistance = position.x - x;
+      const zDistance = position.z - z;
+      const score = xDistance * xDistance + zDistance * zDistance;
+      if (score >= bestScore) continue;
+      bestScore = score;
+      best = { segment, t, x, z, xDistance, zDistance };
+    }
+    if (!best) return null;
+    const { segment, t, x, z, xDistance, zDistance } = best;
+    const normalX = segment.tangent.z;
+    const normalZ = -segment.tangent.x;
+    target.point.set(x, THREE.MathUtils.lerp(segment.start.y, segment.end.y, t), z);
+    target.tangent.copy(segment.tangent);
+    target.normal.set(normalX, 0, normalZ);
+    target.offset = xDistance * normalX + zDistance * normalZ;
+    target.distance = Math.hypot(xDistance, zDistance);
+    target.progress = (segment.distanceAtStart + segment.length * t) / shortcut.length;
+    return target;
+  }
+
+  /**
+   * Enters, tracks and exits shortcut corridors. While active the branch path
+   * replaces the racing line for containment and lap progress, so a shortcut
+   * counts as a legal route instead of a missed-checkpoint penalty.
+   */
+  _updateShortcut(sample) {
+    const shortcuts = this._featureZones?.shortcuts;
+    if (!shortcuts?.length) return null;
+
+    if (this._activeShortcut) {
+      const active = this._sampleShortcut(this._activeShortcut, this.position);
+      const strayed = !active || active.distance > this._activeShortcut.halfWidth + 14;
+      const rejoined = active && active.progress >= 0.985;
+      if (strayed || rejoined) {
+        this._shortcutProgress = rejoined ? 1 : this._shortcutProgress;
+        if (rejoined) this._emit('shortcutExit', { shortcutId: this._activeShortcut.id, state: this.getSnapshot() });
+        this._activeShortcut = null;
+        this.state.onShortcut = false;
+        this.state.shortcutId = null;
+        return null;
+      }
+      this._shortcutProgress = active.progress;
+      return active;
+    }
+
+    const progress = this.trackClosed ? wrap01(sample.progress) : clamp01(sample.progress);
+    for (const shortcut of shortcuts) {
+      // The branch leaves the racing line gradually, so entry is decided by
+      // sitting inside the branch corridor while committed to that side of the
+      // road: a car holding the centre line can never be pulled onto it.
+      if (progress < shortcut.start - 0.006 || progress > shortcut.start + this.config.shortcutEntryWindow) continue;
+      if (Math.sign(sample.offset) !== Math.sign(shortcut.side)) continue;
+      if (Math.abs(sample.offset) < this.config.shortcutEntryOffset) continue;
+      const candidate = this._sampleShortcut(shortcut, this.position);
+      if (!candidate || candidate.distance > shortcut.halfWidth + 2.5) continue;
+      if (candidate.progress > 0.35) continue;
+      if (this.velocity.dot(candidate.tangent) <= 0) continue;
+      this._activeShortcut = shortcut;
+      this._shortcutProgress = candidate.progress;
+      this.state.onShortcut = true;
+      this.state.shortcutId = shortcut.id;
+      this._emit('shortcutEnter', { shortcutId: shortcut.id, savedMeters: shortcut.savedMeters, state: this.getSnapshot() });
+      return candidate;
+    }
+    return null;
   }
 
   /**
@@ -556,14 +687,17 @@ export class ArcadeVehicle {
     this.state.airTime = 0;
     this.state.padBoostTime = 0;
     this.state.launchQuality = null;
+    this.state.onShortcut = false;
+    this.state.shortcutId = null;
+    this._activeShortcut = null;
+    this._shortcutProgress = 0;
     this._padCooldowns.clear();
     this._activeRampId = null;
     this._rampExtra = 0;
     this._heightOffset = 0;
     this._verticalVelocity = 0;
     this._airTime = 0;
-    this._justLanded = 0;
-    this._lastMiniBoostAt = -Infinity;
+    this._justLanded = 0;    this._lastMiniBoostAt = -Infinity;
     this._lastTrackProgress = this.state.trackProgress;
     this._courseProgress = 0;
     this._nextCheckpointNumber = 1;
@@ -679,6 +813,10 @@ export class ArcadeVehicle {
       this.state.boostChain = 0;
       this.state.chargeLevel = 0;
       this.state.launchQuality = null;
+      this.state.onShortcut = false;
+      this.state.shortcutId = null;
+      this._activeShortcut = null;
+      this._shortcutProgress = 0;
       this._padCooldowns.clear();
       this._lastMiniBoostAt = -Infinity;
       this.state.raceStatus = 'idle';
@@ -1057,6 +1195,11 @@ export class ArcadeVehicle {
   _applyTrackConstraint(delta) {
     const sample = this._findTrackSample(this.position, this._sampleScratch);
     if (!sample) return;
+    const shortcutSample = this._updateShortcut(sample);
+    if (shortcutSample) {
+      this._applyShortcutConstraint(shortcutSample, delta);
+      return;
+    }
     const halfWidth = Math.max(1, this.trackWidth * 0.5);
     const roadLimit = Math.max(0.5, halfWidth - this.config.roadMargin);
     const absoluteOffset = Math.abs(sample.offset);
@@ -1249,9 +1392,86 @@ export class ArcadeVehicle {
       : THREE.MathUtils.lerp(this.position.y, targetY, heightResponse);
   }
 
+  /**
+   * Keeps the car inside a shortcut corridor. The branch is narrower than the
+   * racing line, so cutting the corner costs precision instead of being free.
+   */
+  _applyShortcutConstraint(sample, delta) {
+    const halfWidth = this._activeShortcut.halfWidth;
+    const absoluteOffset = Math.abs(sample.offset);
+    const outsideDistance = Math.max(0, absoluteOffset - (halfWidth - 0.6));
+
+    this.state.roadOffset = sample.offset;
+    this.state.offroad = clamp01(outsideDistance / Math.max(2, halfWidth * 0.5));
+
+    if (outsideDistance > 0) {
+      const sign = Math.sign(sample.offset) || 1;
+      _outward.copy(sample.normal).multiplyScalar(sign);
+      let outwardSpeed = this.velocity.dot(_outward);
+      const collisionLimit = halfWidth + 0.4;
+      if (absoluteOffset > collisionLimit) {
+        this.position.x = sample.point.x + sample.normal.x * collisionLimit * sign;
+        this.position.z = sample.point.z + sample.normal.z * collisionLimit * sign;
+        if (outwardSpeed > 0) {
+          this.velocity.addScaledVector(_outward, -outwardSpeed * 1.04);
+          this.velocity.multiplyScalar(0.94);
+          const impact = outwardSpeed;
+          if (impact > 0.8 && this._collisionCooldown <= 0) {
+            this._collisionCooldown = this.config.collisionCooldown;
+            this.state.collisionCount += 1;
+            this.state.collisionImpact = Math.max(this.state.collisionImpact, clamp01(impact / 28));
+            if (impact > 4) this._breakSkillChain('collision');
+            this._emit('collision', {
+              impact,
+              normalizedImpact: clamp01(impact / 28),
+              headOnRatio: clamp01(impact / Math.max(horizontalLength(this.velocity), 1)),
+              side: sign < 0 ? 'left' : 'right',
+              state: this.getSnapshot(),
+            });
+          }
+          outwardSpeed = this.velocity.dot(_outward);
+        }
+      }
+      if (outwardSpeed > 0) {
+        this.velocity.addScaledVector(_outward, -outwardSpeed * (1 - Math.exp(-this.config.boundaryGrip * delta)));
+      }
+      this.velocity.addScaledVector(_outward, -this.config.boundarySpring * outsideDistance * delta);
+    }
+
+    const heightResponse = 1 - Math.exp(-14 * delta);
+    this._heightOffset = 0;
+    this._activeRampId = null;
+    this._rampExtra = 0;
+    if (this.state.airborne) {
+      this._verticalVelocity -= this.config.gravity * delta;
+      this._heightOffset = Math.max(0, this._heightOffset + this._verticalVelocity * delta);
+      this._airTime += delta;
+      if (this._heightOffset <= 0) {
+        this._verticalVelocity = 0;
+        this.state.airborne = false;
+        this._justLanded = this._airTime;
+        this._airTime = 0;
+      }
+      this.position.y = sample.point.y + this.config.rideHeight + this._heightOffset;
+      return;
+    }
+    this.position.y = THREE.MathUtils.lerp(
+      this.position.y,
+      sample.point.y + this.config.rideHeight,
+      heightResponse,
+    );
+  }
+
   _refreshTrackSample() {
     this._trackSample = this._findTrackSample(this.position, this._sampleScratch);
     if (!this._trackSample) return;
+    if (this._activeShortcut) {
+      // A shortcut owns lap progress while it is active: the branch maps onto
+      // the racing-line band it replaces, so laps and checkpoints keep flowing.
+      const { start, end } = this._activeShortcut;
+      this.state.trackProgress = wrap01(start + (end - start) * clamp01(this._shortcutProgress));
+      return;
+    }
     this.state.trackProgress = this.trackClosed
       ? wrap01(this._trackSample.progress)
       : clamp01(this._trackSample.progress);
@@ -1417,7 +1637,9 @@ export class ArcadeVehicle {
   _updateRace(delta) {
     if (!this._trackSample) return;
 
-    const tangentSpeed = this.velocity.dot(this._trackSample.tangent);
+    const tangentSpeed = this.velocity.dot(
+      this._activeShortcut ? this._shortcutSampleScratch.tangent : this._trackSample.tangent,
+    );
     this._wrongWayTime = tangentSpeed < -2
       ? Math.min(2, this._wrongWayTime + delta)
       : Math.max(0, this._wrongWayTime - delta * 2);
@@ -1440,8 +1662,13 @@ export class ArcadeVehicle {
     const expected = this._getExpectedCheckpoint();
     if (expected && this._crossedCheckpoint(expected.checkpoint)) {
       this._passCheckpoint(expected);
+    } else if (expected && this._activeShortcut && this._courseProgress >= expected.expectedCourseProgress) {
+      // The gate itself sits on the racing line the branch bypasses. Credit it
+      // from mapped progress so a legal shortcut is not read as a cut course.
+      this._passCheckpoint(expected);
     } else if (
       expected
+      && !this._activeShortcut
       && this._courseProgress > expected.expectedCourseProgress + this.config.shortcutTolerance
     ) {
       this._markShortcut('missed-checkpoint');

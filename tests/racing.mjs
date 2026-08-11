@@ -229,6 +229,84 @@ assert.ok(rampCar.state.miniBoostTime > 0, 'the landing boost should be active r
 assert.equal(rampCar.state.airborne, false);
 assert.equal(rampCar.state.shortcutStrikes, 0, 'flying over the ramp should not be flagged as a shortcut');
 
+// A shortcut corridor that cuts the corner between t=0.10 and t=0.30.
+const shortcutPoints = [];
+const shortcutStart = 0.1;
+const shortcutEnd = 0.3;
+for (let sample = 0; sample <= 14; sample += 1) {
+  const u = sample / 14;
+  const arcPoint = curve.getPointAt(shortcutStart + (shortcutEnd - shortcutStart) * u);
+  const chordPoint = curve.getPointAt(shortcutStart).clone().lerp(curve.getPointAt(shortcutEnd), u);
+  shortcutPoints.push(arcPoint.clone().lerp(chordPoint, 0.86 * Math.sin(Math.PI * u)));
+}
+const branchSide = (() => {
+  const mid = shortcutPoints[7];
+  const arcMid = curve.getPointAt((shortcutStart + shortcutEnd) / 2);
+  const tangent = curve.getTangentAt((shortcutStart + shortcutEnd) / 2).setY(0).normalize();
+  const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), tangent).normalize();
+  return Math.sign(mid.clone().sub(arcMid).dot(side)) || 1;
+})();
+const shortcutZone = {
+  id: 'sc-1',
+  start: shortcutStart,
+  end: shortcutEnd,
+  side: branchSide,
+  halfWidth: 5.4,
+  savedMeters: 18,
+  points: shortcutPoints.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+};
+
+const branchCar = new ArcadeVehicle({ trackCurve: curve, trackWidth: 16, checkpointCount: 12 });
+branchCar.setTrackFeatures({ shortcuts: [shortcutZone] });
+branchCar.startRace();
+let shortcutEnters = 0;
+let shortcutExits = 0;
+branchCar.on('shortcutEnter', () => { shortcutEnters += 1; });
+branchCar.on('shortcutExit', () => { shortcutExits += 1; });
+// Enter the branch at its mouth, already committed to the shortcut side.
+const mouth = shortcutPoints[0];
+const mouthTangent = curve.getTangentAt(shortcutStart).setY(0).normalize();
+const towardBranch = shortcutPoints[2].clone().sub(shortcutPoints[0]).setY(0).normalize();
+branchCar.position.copy(mouth).addScaledVector(
+  new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), mouthTangent).normalize(),
+  branchSide * 5.2,
+);
+branchCar.heading = Math.atan2(towardBranch.x, towardBranch.z);
+branchCar.velocity.copy(towardBranch).multiplyScalar(42);
+
+function steerAlongBranch(car) {
+  let closestIndex = 0;
+  let closestDistance = Infinity;
+  for (let index = 0; index < shortcutPoints.length; index += 1) {
+    const point = shortcutPoints[index];
+    const distance = Math.hypot(point.x - car.position.x, point.z - car.position.z);
+    if (distance < closestDistance) { closestDistance = distance; closestIndex = index; }
+  }
+  const next = shortcutPoints[Math.min(shortcutPoints.length - 1, closestIndex + 2)];
+  const desired = Math.atan2(next.x - car.position.x, next.z - car.position.z);
+  const error = ((desired - car.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+  return THREE.MathUtils.clamp(error * 2.6, -1, 1);
+}
+
+let maxLateralFromLine = 0;
+for (let step = 0; step < 900 && shortcutExits === 0; step += 1) {
+  branchCar.update(1 / 60, { throttle: 1, steer: steerAlongBranch(branchCar) });
+  if (branchCar.state.onShortcut) {
+    maxLateralFromLine = Math.max(maxLateralFromLine, Math.abs(branchCar.sampleTrack().offset));
+  }
+}
+assert.equal(shortcutEnters, 1, 'driving into the branch mouth should enter the shortcut');
+assert.equal(shortcutExits, 1, 'reaching the end of the branch should rejoin the racing line');
+assert.ok(maxLateralFromLine > 12, 'the shortcut should carry the car well off the racing line');
+assert.equal(branchCar.state.onShortcut, false, 'the shortcut should be released after rejoining');
+assert.equal(branchCar.state.shortcutStrikes, 0, 'a legal shortcut must not be judged as a cut course');
+assert.equal(branchCar.state.respawnCount, 0, 'a legal shortcut must not force a respawn');
+assert.ok(
+  branchCar.state.checkpointsPassed >= 2,
+  'checkpoints bypassed by the branch should still be credited',
+);
+assert.equal(branchCar.state.wrongWay, false, 'the branch direction must not read as wrong way');
+
 console.log(JSON.stringify({
   checkpoints: checkpointEvents,
   laps: lapEvents,
@@ -246,4 +324,7 @@ console.log(JSON.stringify({
   padBoosts,
   rampLaunches,
   rampLandings,
+  shortcutEnters,
+  shortcutExits,
+  shortcutLateral: Number(maxLateralFromLine.toFixed(1)),
 }));
