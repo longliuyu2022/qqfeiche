@@ -57,9 +57,16 @@ vehicle.update(0.01);
 assert.equal(vehicle.input.steer, 0, 'opposite steering touches should cancel');
 
 controls.throttle.dispatchEvent(pointerEvent('pointerup', 11));
+controls.right.dispatchEvent(pointerEvent('pointerup', 15));
+vehicle.velocity.set(0, 0, 12);
+vehicle.update(0);
+vehicle.update(0.01);
+assert.equal(vehicle.input.throttle, 1, 'touch drift should maintain throttle after the driver leaves the accelerator');
+assert.equal(vehicle.state.isDrifting, true, 'two-finger steering and drift should engage a drift');
+
 controls.brake.dispatchEvent(pointerEvent('pointerdown', 16));
 vehicle.update(0.01);
-assert.equal(vehicle.input.throttle, 0);
+assert.equal(vehicle.input.throttle, 0, 'touch brake should override drift throttle assist');
 assert.equal(vehicle.input.brake, 1, 'touch brake should support braking and reverse');
 
 for (const [name, pointerId] of [
@@ -79,6 +86,7 @@ assert.deepEqual(vehicle.input, {
 console.log(JSON.stringify({
   mobileDirection: 'ok',
   multiTouch: 'ok',
+  twoFingerDrift: 'ok',
   opposingSteer: 'ok',
   touchBrake: 'ok',
   pointercancel: 'ok',

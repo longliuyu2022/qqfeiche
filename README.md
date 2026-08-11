@@ -4,11 +4,17 @@
 
 > 项目根目录：`/root/neon-apex`
 >
-> 当前版本：`v1.4.1`（Android `versionCode 10`）
+> 当前版本：`v1.4.2`（Android `versionCode 11`）
 >
 > 在线游戏：<https://gaokao.aiimage.icu/>
 >
 > Android 下载：[APK](https://gaokao.aiimage.icu/downloads/neon-apex-release.apk) · [AAB](https://gaokao.aiimage.icu/downloads/neon-apex-release.aab)
+
+## v1.4.2 更新
+
+- 手机漂移改为两指操作：达到入弯速度后，同时按方向和“漂移”即可自动维持油门
+- 触屏刹车会覆盖漂移油门辅助，桌面键盘操作与驾驶手感保持不变
+- Android 版本更新为 `1.4.2 (11)`
 
 ## v1.4.1 更新
 
@@ -173,11 +179,11 @@ artifacts/apk/neon-apex-release.apk
 artifacts/aab/neon-apex-release.aab
 ```
 
-当前已部署产物（2026-08-11，`v1.4.1 (10)`）：
+当前已部署产物（2026-08-11，`v1.4.2 (11)`）：
 
 ```text
-APK SHA-256  c9e456ee877bfb4f96d25facc596c0c75919a73f3752c9fa09b94f679c5db8c8
-AAB SHA-256  776c258796db514d6a7ba8a53fb52885057c4df0322a9708a31c73e4b86b7f61
+APK SHA-256  0495ae7d877c9012a190535a9b8d1a1f6c28e7457e6cdc5ed7e3592dc74c6f5c
+AAB SHA-256  4c64e465f7ec6e13643203b5ddfecf5b0e950239c49f006180fd48a51f249e85
 证书 SHA-256 165b461910953729306cf12464a993ea300d44edb553f0f79191e44d72b43b6c
 ```
 
@@ -266,7 +272,7 @@ npm run deploy:server
 cc-connect daemon status
 cc-connect sessions list
 cc-connect send -p codex-relay_d03f2587 \
-  -m "Neon Apex v1.4.1 路线修复 release" \
+  -m "Neon Apex v1.4.2 两指漂移 release" \
   --file /root/neon-apex/artifacts/apk/neon-apex-release.apk
 ```
 

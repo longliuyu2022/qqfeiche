@@ -720,7 +720,12 @@ export class ArcadeVehicle {
 
   _resolveInput() {
     const maximum = (name) => Math.max(this._manualInput[name], this._keyboardInput[name], this._touchInput[name]);
-    this.input.throttle = maximum('throttle');
+    const touchDriftThrottle = this._touchInput.drift > 0.5
+      && this._touchInput.brake < 0.5
+      && this.state.forwardSpeed > this.config.driftMinSpeed * 0.75
+      ? 1
+      : 0;
+    this.input.throttle = Math.max(maximum('throttle'), touchDriftThrottle);
     this.input.brake = maximum('brake');
     this.input.drift = maximum('drift');
     this.input.nitro = maximum('nitro');
