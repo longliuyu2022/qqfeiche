@@ -1,0 +1,38 @@
+export const RACE_MODES = Object.freeze({
+  race: {
+    id: 'race',
+    laps: 3,
+    rivals: 5,
+    meta: 'HARBOR CITY // 23:48',
+    title: '天际线大奖赛',
+    rules: '3 LAPS // 6 RACERS',
+    resultTitle: '冲线',
+  },
+  items: {
+    id: 'items',
+    laps: 3,
+    rivals: 5,
+    meta: 'NEON CUP // ITEM BATTLE',
+    title: '霓虹道具大奖赛',
+    rules: '3 LAPS // 4 ITEMS // 6 RACERS',
+    resultTitle: '道具赛冲线',
+  },
+  timeTrial: {
+    id: 'timeTrial',
+    laps: 1,
+    rivals: 0,
+    meta: 'SOLO RUN // TIME ATTACK',
+    title: '夜港计时赛',
+    rules: '1 LAP // PERSONAL BEST',
+    resultTitle: '计时完成',
+  },
+  drift: {
+    id: 'drift',
+    laps: 1,
+    rivals: 0,
+    meta: 'SOLO RUN // DRIFT ATTACK',
+    title: '霓虹漂移挑战',
+    rules: '1 LAP // HIGH SCORE',
+    resultTitle: '漂移完成',
+  },
+});

@@ -1,0 +1,37 @@
+{
+  "name": "neon-apex",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "server": "node server/index.mjs",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test:race": "node tests/racing.mjs",
+    "test:records": "node tests/race-records.mjs",
+    "test:touch": "node tests/touch-controls.mjs",
+    "test:keyboard": "node tests/keyboard-controls.mjs",
+    "test:preferences": "node tests/preferences.mjs",
+    "test:tracks": "node tests/tracks.mjs",
+    "test:multiplayer": "node tests/multiplayer.mjs",
+    "test:items": "node tests/item-race.mjs",
+    "test": "npm run test:race && npm run test:items && npm run test:records && npm run test:preferences && npm run test:tracks && npm run test:multiplayer && npm run test:touch && npm run test:keyboard",
+    "test:visual": "node tests/visual.mjs",
+    "test:sections": "node tests/sections.mjs",
+    "test:online-browser": "node tests/online-browser.mjs",
+    "test:item-browser": "node tests/item-browser.mjs",
+    "test:maps-browser": "node tests/maps-browser.mjs",
+    "deploy:server": "bash scripts/deploy-server.sh",
+    "deploy": "bash scripts/deploy.sh"
+  },
+  "dependencies": {
+    "three": "^0.179.1",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.2",
+    "pngjs": "^7.0.0",
+    "vite": "^7.0.6"
+  }
+}

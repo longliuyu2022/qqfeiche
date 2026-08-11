@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.android-sdk/
+.android-sdk-commandlinetools.zip
+.gradle-dist/
+.gradle/
+android/.gradle/
+android/local.properties
+android/app/build/
+artifacts/debug-*.png
+*.log
+.DS_Store
+
+# 构建产物：由 scripts/build-apk.sh 从 dist/ 复制生成
+android/app/src/main/assets/
+# 发布二进制：由 scripts/build-apk.sh 重新生成，与 dist/ 同类
+artifacts/apk/
+artifacts/aab/
+# 会话与任务状态，非源码
+.mindfs/
+
+# 签名材料绝不入库
+*.jks
+*.keystore
+signing.properties

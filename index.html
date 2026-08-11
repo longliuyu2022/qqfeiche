@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#06090d" />
+    <meta name="description" content="Neon Apex - Three.js arcade racing experience" />
+    <title>Neon Apex // 夜港极速</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23050a0e'/%3E%3Cpath d='M13 47V17h8l14 18V17h8v30h-8L21 29v18z' fill='%2335e7ff'/%3E%3C/svg%3E" />
+  </head>
+  <body class="menu-open pre-game">
+    <div id="app">
+      <canvas id="game" aria-label="Neon Apex 3D 赛车游戏"></canvas>
+
+      <div class="cinematic-bars" aria-hidden="true"></div>
+      <div class="vignette" aria-hidden="true"></div>
+      <div class="speed-lines" aria-hidden="true"></div>
+
+      <header class="topbar hud-panel">
+        <div class="brand-lockup">
+          <span class="brand-mark">NA</span>
+          <div><strong>NEON APEX</strong><small id="hudTrackName">夜港极速</small></div>
+        </div>
+        <div class="race-meta">
+          <div class="meta-block"><span>POSITION</span><b id="position">1<small>/ 6</small></b></div>
+          <div class="meta-block"><span>LAP</span><b id="lap">1<small>/ 3</small></b></div>
+          <div class="meta-block time"><span>RACE TIME</span><b id="time">00:00.000</b></div>
+        </div>
+        <button id="pause" class="icon-btn" type="button" title="暂停" aria-label="暂停">
+          <span></span><span></span>
+        </button>
+      </header>
+
+      <aside class="race-feed" aria-live="polite">
+        <span class="feed-kicker">LIVE EVENT</span>
+        <strong id="raceFeedTitle">夜港天际线</strong>
+        <small id="raceFeedMeta">HARBOR CITY // 23:48</small>
+      </aside>
+
+      <aside class="performance-strip" aria-label="比赛表现">
+        <div><span>CHECKPOINT</span><b id="checkpoint">01 / 16</b></div>
+        <div><span>DRIFT SCORE</span><b id="driftScore">000000</b></div>
+        <div id="comboBlock"><span>CHAIN</span><b id="combo">x1</b></div>
+      </aside>
+
+      <section class="center-callout" aria-live="assertive">
+        <div id="countdown" class="countdown">3</div>
+        <div id="callout" class="callout"></div>
+      </section>
+
+      <aside class="minimap-wrap hud-panel" aria-label="赛道地图">
+        <canvas id="minimap" width="184" height="184"></canvas>
+        <div class="map-label"><span>SECTOR</span><b id="sector">01</b></div>
+      </aside>
+
+      <section class="telemetry" aria-label="车辆状态">
+        <div class="speed-readout">
+          <span id="gear" class="gear">N</span>
+          <div><b id="speed">000</b><small>KM/H</small></div>
+        </div>
+        <div class="tach"><i id="tachFill"></i><span>1</span><span>3</span><span>5</span><span>7</span><span>9</span></div>
+        <div class="nitro-row">
+          <span>NITRO</span>
+          <div class="nitro-track"><i id="nitroFill"></i></div>
+          <b id="nitroPct">100</b>
+        </div>
+      </section>
+
+      <aside id="itemHud" class="item-hud" aria-label="当前道具">
+        <button id="itemUse" type="button" disabled aria-label="尚未获得道具">
+          <b id="itemIcon">?</b><small id="itemName">等待拾取</small><kbd>E</kbd>
+        </button>
+      </aside>
+
+      <div class="controls-hint">
+        <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 驾驶</span>
+        <span><kbd>SPACE</kbd> 漂移</span>
+        <span><kbd>SHIFT</kbd> 氮气</span>
+      </div>
+
+      <div class="touch-controls" aria-label="触屏驾驶控制">
+        <div class="steer-pad">
+          <button data-control="left" type="button" aria-label="左转">&#x2039;</button>
+          <button data-control="right" type="button" aria-label="右转">&#x203A;</button>
+        </div>
+        <div class="pedal-pad">
+          <button class="brake" data-control="brake" type="button" aria-label="制动或倒车" title="制动或倒车">&#x2193;</button>
+          <button class="drift" data-control="drift" type="button" aria-label="漂移">DRIFT</button>
+          <button class="nitro" data-control="nitro" type="button" aria-label="氮气">N<sub>2</sub>O</button>
+          <button class="throttle" data-control="accelerate" type="button" aria-label="加速" title="加速">&#x2191;</button>
+        </div>
+      </div>
+
+      <section id="homeMenu" class="home-screen" aria-label="游戏首页">
+        <div class="home-content">
+          <span id="homeKicker" class="home-kicker">NIGHT CIRCUIT 01</span>
+          <div class="home-lockup">
+            <span class="home-mark">NA</span>
+            <div>
+              <h1>NEON APEX</h1>
+              <p id="homeTrackSubtitle">夜港极速</p>
+            </div>
+          </div>
+          <div id="trackSelector" class="track-selector" role="tablist" aria-label="赛道地图">
+            <button class="active" data-track="night" type="button" role="tab" aria-selected="true"><span class="track-swatch night" aria-hidden="true"></span><strong>夜港</strong><small>雨夜城市</small></button>
+            <button data-track="day" type="button" role="tab" aria-selected="false"><span class="track-swatch day" aria-hidden="true"></span><strong>晴川</strong><small>白昼山谷</small></button>
+            <button data-track="alpine" type="button" role="tab" aria-selected="false"><span class="track-swatch alpine" aria-hidden="true"></span><strong>雪岭极光</strong><small>极地雪峰</small></button>
+            <button data-track="canyon" type="button" role="tab" aria-selected="false"><span class="track-swatch canyon" aria-hidden="true"></span><strong>赤砂峡谷</strong><small>落日岩谷</small></button>
+            <button data-track="coast" type="button" role="tab" aria-selected="false"><span class="track-swatch coast" aria-hidden="true"></span><strong>蔚蓝海岸</strong><small>临海悬崖</small></button>
+          </div>
+          <div id="modeSelector" class="mode-selector" role="tablist" aria-label="赛事模式">
+            <button class="active" data-race-mode="race" type="button" role="tab" aria-selected="true"><strong>竞速</strong><small>3 圈</small></button>
+            <button data-race-mode="items" type="button" role="tab" aria-selected="false"><strong>道具</strong><small>对战</small></button>
+            <button data-race-mode="timeTrial" type="button" role="tab" aria-selected="false"><strong>计时</strong><small>单圈</small></button>
+            <button data-race-mode="drift" type="button" role="tab" aria-selected="false"><strong>漂移</strong><small>单圈</small></button>
+          </div>
+          <div class="home-event">
+            <span id="homeEventMeta">HARBOR CITY // 23:48</span>
+            <strong id="homeEventTitle">天际线大奖赛</strong>
+            <small id="homeEventRules">3 LAPS // 6 RACERS</small>
+          </div>
+          <dl class="home-records" aria-label="本地生涯记录">
+            <div><dt id="homeBestLabel">PERSONAL BEST</dt><dd id="homeBest">--:--.---</dd></div>
+            <div><dt>RACES</dt><dd id="homeRaces">0</dd></div>
+            <div><dt>WINS</dt><dd id="homeWins">0</dd></div>
+          </dl>
+          <div class="home-actions">
+            <button id="startRace" class="home-start" type="button"><span aria-hidden="true"></span>开始比赛</button>
+            <button id="openMultiplayer" class="home-online" type="button">联机</button>
+            <button id="openSettings" class="home-settings" type="button">设置</button>
+          </div>
+        </div>
+      </section>
+
+      <div id="multiplayerMenu" class="modal multiplayer-modal" hidden>
+        <div class="modal-content">
+          <span class="modal-kicker">ONLINE FRIEND RACE</span>
+          <h1>联机比赛</h1>
+          <div id="onlineConnect" class="online-connect">
+            <label for="onlineName"><span>游客昵称</span><input id="onlineName" type="text" maxlength="12" autocomplete="nickname" placeholder="输入昵称" /></label>
+            <button id="createRoom" class="primary-action" type="button">创建好友房间</button>
+            <div class="online-divider"><span>或使用房间码</span></div>
+            <div class="online-join-row">
+              <label for="roomCode"><span>房间码</span><input id="roomCode" type="text" maxlength="6" autocomplete="off" autocapitalize="characters" placeholder="6 位房间码" /></label>
+              <button id="joinRoom" class="secondary-action" type="button">加入</button>
+            </div>
+          </div>
+          <div id="onlineLobby" class="online-lobby" hidden>
+            <div class="room-code-panel"><span>ROOM CODE</span><button id="copyRoomCode" type="button" title="复制房间码"><b id="onlineRoomCode">------</b></button></div>
+            <div class="room-map"><span>比赛地图</span><b id="onlineMapName">夜港天际线</b></div>
+            <ol id="onlinePlayers" class="online-players" aria-label="房间车手"></ol>
+            <button id="startOnlineRace" class="primary-action" type="button" disabled>等待车手加入</button>
+            <button id="leaveRoom" class="secondary-action" type="button">离开房间</button>
+          </div>
+          <p id="onlineStatus" class="online-status" aria-live="polite">2–6 人好友赛，由房主发车</p>
+          <button id="closeMultiplayer" class="modal-close" type="button" aria-label="关闭" title="关闭">&#x00D7;</button>
+        </div>
+      </div>
+
+      <div id="settingsMenu" class="modal settings-modal" hidden>
+        <div class="modal-content">
+          <span class="modal-kicker">GAME SETTINGS</span>
+          <h1>游戏设置</h1>
+          <div class="settings-list">
+            <label class="setting-row" for="soundEnabled"><span><b>游戏声音</b><small>引擎与比赛提示音</small></span><input id="soundEnabled" type="checkbox" /></label>
+            <label class="setting-row volume-setting" for="masterVolume"><span><b>音量</b><small id="volumeValue">70%</small></span><input id="masterVolume" type="range" min="0" max="1" step="0.05" /></label>
+            <label class="setting-row" for="qualitySetting"><span><b>画面质量</b><small>重启后完整应用</small></span><select id="qualitySetting"><option value="auto">自动</option><option value="balanced">流畅</option><option value="high">高画质</option></select></label>
+            <label class="setting-row" for="vibrationEnabled"><span><b>触感反馈</b><small>漂移、氮气与碰撞</small></span><input id="vibrationEnabled" type="checkbox" /></label>
+            <label class="setting-row" for="cameraShakeEnabled"><span><b>镜头震动</b><small>高速与碰撞反馈</small></span><input id="cameraShakeEnabled" type="checkbox" /></label>
+          </div>
+          <button id="closeSettings" class="primary-action" type="button">完成</button>
+        </div>
+      </div>
+
+      <div id="loading" class="loading-screen done" style="display: none">
+        <div class="loading-brand"><span>NA</span></div>
+        <p>NEON APEX</p>
+        <div class="loading-track"><i></i></div>
+        <small>正在部署天际赛道</small>
+      </div>
+
+      <div id="pauseMenu" class="modal" hidden>
+        <div class="modal-content">
+          <span class="modal-kicker">RACE PAUSED</span>
+          <h1>比赛暂停</h1>
+          <button id="resume" class="primary-action" type="button">继续比赛</button>
+          <button id="restart" class="secondary-action" type="button">重新开始</button>
+          <button id="toHome" class="secondary-action" type="button">返回首页</button>
+        </div>
+      </div>
+
+      <div id="resultMenu" class="modal result-modal" hidden>
+        <div class="modal-content">
+          <span class="modal-kicker">RACE COMPLETE</span>
+          <h1 id="resultTitle">冲线</h1>
+          <div class="result-position"><b id="resultPosition">1</b><span>/ 6</span></div>
+          <dl class="result-grid">
+            <div><dt>TOTAL TIME</dt><dd id="resultTime">00:00.000</dd></div>
+            <div><dt>BEST LAP</dt><dd id="bestLap">00:00.000</dd></div>
+            <div><dt>DRIFT SCORE</dt><dd id="resultScore">000000</dd></div>
+          </dl>
+          <div class="record-strip">
+            <span id="recordStatus">PERSONAL BEST</span>
+            <b id="personalBest">--:--.---</b>
+          </div>
+          <button id="raceAgain" class="primary-action" type="button">再次比赛</button>
+          <button id="resultHome" class="secondary-action" type="button">返回首页</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/bootstrap.js"></script>
+  </body>
+</html>

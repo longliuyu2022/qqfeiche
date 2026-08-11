@@ -1,0 +1,68 @@
+plugins {
+  id 'com.android.application'
+}
+
+def signingPropertiesFile = file(System.getenv('NEON_APEX_SIGNING_PROPERTIES')
+  ?: "${System.getProperty('user.home')}/.config/neon-apex/signing.properties")
+def releaseRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
+if (!signingPropertiesFile.exists() && releaseRequested) {
+  throw new GradleException("Missing Neon Apex release signing properties: ${signingPropertiesFile}")
+}
+def signingProperties = new Properties()
+if (signingPropertiesFile.exists()) {
+  signingPropertiesFile.withInputStream { signingProperties.load(it) }
+  ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].each { key ->
+    if (!signingProperties.getProperty(key)) {
+      throw new GradleException("Missing ${key} in ${signingPropertiesFile}")
+    }
+  }
+}
+
+android {
+  namespace 'icu.aiimage.gaokao.neonapex'
+  compileSdk 35
+
+  defaultConfig {
+    applicationId 'icu.aiimage.gaokao.neonapex'
+    minSdk 26
+    targetSdk 35
+    versionCode 9
+    versionName '1.4.0'
+  }
+
+  signingConfigs {
+    release {
+      if (signingPropertiesFile.exists()) {
+        storeFile file(signingProperties.getProperty('storeFile'))
+        storePassword signingProperties.getProperty('storePassword')
+        keyAlias signingProperties.getProperty('keyAlias')
+        keyPassword signingProperties.getProperty('keyPassword')
+        enableV1Signing true
+        enableV2Signing true
+        enableV3Signing true
+        enableV4Signing true
+      }
+    }
+  }
+
+  buildTypes {
+    release {
+      minifyEnabled true
+      shrinkResources true
+      if (signingPropertiesFile.exists()) {
+        signingConfig signingConfigs.release
+      }
+      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+    }
+  }
+
+  sourceSets {
+    main {
+      assets.srcDirs = ['src/main/assets']
+    }
+  }
+}
+
+dependencies {
+  implementation 'androidx.webkit:webkit:1.12.1'
+}
