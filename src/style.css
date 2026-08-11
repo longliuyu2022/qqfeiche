@@ -135,11 +135,11 @@ body[data-race-mode="items"] .item-hud { display: block; }
 .track-selector button small { align-self: start; color: #70858d; font-size: 8px; }
 .track-selector button.active { color: var(--cyan-hot); background: rgba(53,231,255,.12); box-shadow: inset 0 -3px var(--cyan); }
 .track-swatch { grid-row: 1 / 3; width: 42px; height: 42px; border: 1px solid rgba(255,255,255,.3); background-color: #10202a; background-position: center; background-size: cover; box-shadow: inset 0 0 12px rgba(0,0,0,.18); }
-.track-swatch.night { background: linear-gradient(150deg, #0d2430 0 46%, #22cde3 48% 54%, #6f233e 56%); }
-.track-swatch.day { background: linear-gradient(150deg, #87cce7 0 42%, #f2d06c 44% 50%, #4b813f 52%); }
-.track-swatch.alpine { background-image: linear-gradient(rgba(5,20,31,.08), rgba(5,20,31,.24)), url('/assets/tracks/alpine-cover.png'); }
-.track-swatch.canyon { background-image: linear-gradient(rgba(38,12,5,.06), rgba(38,12,5,.22)), url('/assets/tracks/canyon-cover.png'); }
-.track-swatch.coast { background-image: linear-gradient(rgba(2,24,35,.05), rgba(2,24,35,.2)), url('/assets/tracks/coast-cover.png'); }
+.track-swatch.night { background-image: linear-gradient(rgba(2,16,24,.06), rgba(2,16,24,.26)), url('/assets/tracks/night-cover.webp'); }
+.track-swatch.day { background-image: linear-gradient(rgba(20,42,18,.04), rgba(20,42,18,.2)), url('/assets/tracks/day-cover.webp'); }
+.track-swatch.alpine { background-image: linear-gradient(rgba(5,20,31,.08), rgba(5,20,31,.24)), url('/assets/tracks/alpine-cover.webp'); }
+.track-swatch.canyon { background-image: linear-gradient(rgba(38,12,5,.06), rgba(38,12,5,.22)), url('/assets/tracks/canyon-cover.webp'); }
+.track-swatch.coast { background-image: linear-gradient(rgba(2,24,35,.05), rgba(2,24,35,.2)), url('/assets/tracks/coast-cover.webp'); }
 .mode-selector { width: min(430px, 100%); height: 46px; display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 8px; border: 1px solid rgba(166,238,255,.2); }
 .mode-selector button { border: 0; background: rgba(3,9,13,.64); color: #879ba3; cursor: pointer; }
 .mode-selector button + button { border-left: 1px solid rgba(166,238,255,.14); }

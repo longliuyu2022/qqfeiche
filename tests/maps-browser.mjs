@@ -61,8 +61,8 @@ for (const testCase of cases) {
 
   const home = await page.evaluate(async () => {
     const ids = [...document.querySelectorAll('#trackSelector [data-track]')].map((button) => button.dataset.track);
-    const covers = await Promise.all(['alpine', 'canyon', 'coast'].map(async (id) => {
-      const response = await fetch(`/assets/tracks/${id}-cover.png`, { cache: 'no-store' });
+    const covers = await Promise.all(ids.map(async (id) => {
+      const response = await fetch(`/assets/tracks/${id}-cover.webp`, { cache: 'no-store' });
       return { id, status: response.status, contentType: response.headers.get('content-type') };
     }));
     const selector = document.querySelector('#trackSelector');
@@ -76,6 +76,7 @@ for (const testCase of cases) {
   });
   assert.deepEqual(home.ids, ['night', 'day', 'alpine', 'canyon', 'coast']);
   assert.ok(home.covers.every((cover) => cover.status === 200), `${testCase.name}: a map cover did not load: ${JSON.stringify(home.covers)}`);
+  assert.ok(home.covers.every((cover) => cover.contentType === 'image/webp'), `${testCase.name}: a map cover has the wrong content type: ${JSON.stringify(home.covers)}`);
   assert.equal(home.pageOverflow, false, `${testCase.name}: home page overflows horizontally`);
   if (testCase.mobile) assert.ok(home.selectorScrollWidth > home.selectorWidth, 'mobile selector should scroll across five maps');
 
@@ -109,6 +110,7 @@ for (const testCase of cases) {
     assert.ok(runtime.world && runtime.road, `${testCase.name}/${id}: world metadata missing`);
     assert.ok(runtime.curveLength > 1200, `${testCase.name}/${id}: route is too short`);
     assert.ok(runtime.objectCount > 10, `${testCase.name}/${id}: scene has too few objects`);
+    await page.waitForTimeout(2500);
     const dataUrl = await page.evaluate((trackId) => window.__NEON_APEX__.qaCaptureProgress({ alpine: 0.12, canyon: 0.42, coast: 0.68 }[trackId]), id);
     const image = Buffer.from(dataUrl.split(',')[1], 'base64');
     const path = `artifacts/maps/${testCase.name}-${id}.png`;

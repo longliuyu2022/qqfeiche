@@ -26,10 +26,12 @@ rollback() {
 trap rollback EXIT
 
 install -m 0644 "${PROJECT_DIR}/server/index.mjs" "${STAGE_DIR}/index.mjs"
+install -m 0644 "${PROJECT_DIR}/server/race-validation.mjs" "${STAGE_DIR}/race-validation.mjs"
 install -m 0644 "${PROJECT_DIR}/server/package.json" "${STAGE_DIR}/package.json"
 install -m 0644 "${PROJECT_DIR}/server/package-lock.json" "${STAGE_DIR}/package-lock.json"
 npm ci --omit=dev --ignore-scripts --prefix "${STAGE_DIR}"
 node --check "${STAGE_DIR}/index.mjs"
+node --check "${STAGE_DIR}/race-validation.mjs"
 chmod 0755 "${STAGE_DIR}"
 
 mkdir -p "${RELEASE_DIR}"

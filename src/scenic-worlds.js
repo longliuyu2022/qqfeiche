@@ -52,17 +52,17 @@ const THEMES = Object.freeze({
   alpine: Object.freeze({
     name: 'FrostpeakAlpineWorld', roadName: 'FrostpeakCircuitRoad', seed: 0xa17e2026,
     skyTop: 0x081523, skyHorizon: 0x6e93ad, fog: 0x9eb5c4, fogDensity: 0.00115,
-    sun: 0xcce9ff, sunIntensity: 4.3, sunPosition: [-260, 360, -80],
-    hemisphereSky: 0xcceaff, hemisphereGround: 0x253542, hemisphereIntensity: 2.7,
-    ground: 0xb9c7cc, shoulder: 0xe6eef0, rock: 0x495b67, accent: 0x5de7ff,
+    sun: 0xcce9ff, sunIntensity: 2.65, sunPosition: [-260, 360, -80],
+    hemisphereSky: 0xcceaff, hemisphereGround: 0x253542, hemisphereIntensity: 1.75,
+    ground: 0x81949b, shoulder: 0xcbd7da, rock: 0x495b67, accent: 0x5de7ff,
     curbA: 0x28b9d1, curbB: 0xecf7f7, foliage: [0x173c36, 0x215348, 0x2e6554],
     materialAsset: 'dark_rock', groundBase: -4, cloudColor: 0xd9e7ed,
   }),
   canyon: Object.freeze({
     name: 'RedMesaCanyonWorld', roadName: 'RedMesaCircuitRoad', seed: 0xca990026,
     skyTop: 0x17304a, skyHorizon: 0xf29a62, fog: 0xd99062, fogDensity: 0.00102,
-    sun: 0xffd0a0, sunIntensity: 5.2, sunPosition: [-340, 190, 250],
-    hemisphereSky: 0xffd5b0, hemisphereGround: 0x5d2f24, hemisphereIntensity: 2.45,
+    sun: 0xffd0a0, sunIntensity: 3.65, sunPosition: [-340, 190, 250],
+    hemisphereSky: 0xffd5b0, hemisphereGround: 0x5d2f24, hemisphereIntensity: 1.7,
     ground: 0x9b4d32, shoulder: 0xc7794d, rock: 0x8b3f2d, accent: 0xffbd54,
     curbA: 0xf4d191, curbB: 0x552b2a, foliage: [0x526b3b, 0x6e7c43, 0x88914c],
     materialAsset: 'dark_rock', groundBase: -7, cloudColor: 0xffd8bd,
@@ -70,8 +70,8 @@ const THEMES = Object.freeze({
   coast: Object.freeze({
     name: 'AzureCoastWorld', roadName: 'AzureCoastCircuitRoad', seed: 0xc0457026,
     skyTop: 0x1974a5, skyHorizon: 0x9ee3ee, fog: 0xa7d9df, fogDensity: 0.00082,
-    sun: 0xfff1ca, sunIntensity: 4.8, sunPosition: [-240, 330, 180],
-    hemisphereSky: 0xd8f5ff, hemisphereGround: 0x315b4c, hemisphereIntensity: 2.8,
+    sun: 0xfff1ca, sunIntensity: 3.55, sunPosition: [-240, 330, 180],
+    hemisphereSky: 0xd8f5ff, hemisphereGround: 0x315b4c, hemisphereIntensity: 1.95,
     ground: 0x49735b, shoulder: 0xd3cfb8, rock: 0x65716b, accent: 0x35e7ff,
     curbA: 0x168cb4, curbB: 0xf5f0dc, foliage: [0x174f46, 0x23715b, 0x3d8a63],
     materialAsset: 'dark_rock', groundBase: -5, cloudColor: 0xf4fbff,
@@ -84,6 +84,39 @@ function seededRandom(seed) {
     value = (value * 1664525 + 1013904223) >>> 0;
     return value / 4294967296;
   };
+}
+
+function createMountainGeometry(segments = 16, rings = 8) {
+  const positions = [];
+  const indices = [];
+  for (let ring = 0; ring <= rings; ring += 1) {
+    const t = ring / rings;
+    const radius = ring === rings ? 0.045 : Math.pow(1 - t, 0.92) * (0.94 + Math.sin(ring * 2.7) * 0.06);
+    for (let segment = 0; segment < segments; segment += 1) {
+      const angle = (segment / segments) * Math.PI * 2;
+      const variation = 1 + Math.sin(angle * 3 + ring * 1.7) * 0.09 + Math.cos(angle * 5 - ring) * 0.045;
+      positions.push(
+        Math.cos(angle) * radius * variation,
+        t,
+        Math.sin(angle) * radius * variation,
+      );
+    }
+  }
+  for (let ring = 0; ring < rings; ring += 1) {
+    for (let segment = 0; segment < segments; segment += 1) {
+      const next = (segment + 1) % segments;
+      const a = ring * segments + segment;
+      const b = ring * segments + next;
+      const c = (ring + 1) * segments + segment;
+      const d = (ring + 1) * segments + next;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function loadTexture(asset, file, isColor = false) {
@@ -261,42 +294,43 @@ function createGround(root, theme, random, qualityTier) {
   root.add(ground);
 
   const mountainCount = qualityTier === 'balanced' ? 32 : 54;
-  const mountainGeometry = new THREE.ConeGeometry(1, 1, qualityTier === 'balanced' ? 8 : 12, 3);
-  mountainGeometry.translate(0, 0.5, 0);
-  const rockMaterial = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.91, flatShading: true });
+  const mountainGeometry = createMountainGeometry(qualityTier === 'balanced' ? 14 : 18, 8);
+  const rockMaterial = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.94, flatShading: false });
   applyPbr(rockMaterial, 'dark_rock', [2, 3]);
   const mountains = new THREE.InstancedMesh(mountainGeometry, rockMaterial, mountainCount);
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
+  const mountainTransforms = [];
   for (let index = 0; index < mountainCount; index += 1) {
     const angle = (index / mountainCount) * Math.PI * 2 + (random() - 0.5) * 0.18;
     const radius = 430 + random() * 245;
     const width = 58 + random() * 92;
     const height = 90 + random() * (theme.name.includes('Alpine') ? 210 : 145);
     quaternion.setFromAxisAngle(UP, random() * Math.PI);
+    const position = new THREE.Vector3(Math.cos(angle) * radius, theme.groundBase - 4, Math.sin(angle) * radius);
+    const scale = new THREE.Vector3(width, height, width * (0.72 + random() * 0.6));
     matrix.compose(
-      new THREE.Vector3(Math.cos(angle) * radius, theme.groundBase - 4, Math.sin(angle) * radius),
+      position,
       quaternion,
-      new THREE.Vector3(width, height, width * (0.72 + random() * 0.6)),
+      scale,
     );
     mountains.setMatrixAt(index, matrix);
+    mountainTransforms.push({ position: position.clone(), scale: scale.clone() });
   }
   mountains.castShadow = qualityTier !== 'balanced';
   mountains.receiveShadow = true;
   root.add(mountains);
 
   if (theme.name.includes('Alpine')) {
-    const capMaterial = new THREE.MeshStandardMaterial({ color: 0xe3ecef, roughness: 0.82 });
+    const capMaterial = new THREE.MeshStandardMaterial({ color: 0xb8cbd1, roughness: 0.94, metalness: 0.01 });
     const caps = new THREE.InstancedMesh(mountainGeometry, capMaterial, mountainCount);
     for (let index = 0; index < mountainCount; index += 1) {
-      const angle = (index / mountainCount) * Math.PI * 2;
-      const radius = 432 + ((index * 73) % 210);
-      const width = 31 + (index % 9) * 3.5;
-      const height = 47 + (index % 11) * 6;
+      const source = mountainTransforms[index];
+      const capScale = source.scale.clone().multiply(new THREE.Vector3(0.28, 0.12, 0.28));
       matrix.compose(
-        new THREE.Vector3(Math.cos(angle) * radius, 69 + (index % 7) * 6, Math.sin(angle) * radius),
+        source.position.clone().add(new THREE.Vector3(0, source.scale.y * 0.84, 0)),
         quaternion.identity(),
-        new THREE.Vector3(width, height, width),
+        capScale,
       );
       caps.setMatrixAt(index, matrix);
     }

@@ -20,11 +20,6 @@
 - 新增五地图单元测试和桌面/手机横屏 Playwright 画布回归，检查封面、场景对象、路线长度、页面溢出与非空渲染
 - Android 版本更新为 `1.4.0 (9)`
 
-## v1.2.3 更新
-
-- 优化手机网页与 Android WebView 的速度仪表：改为右下方紧凑半透明布局，避开屏幕中央赛道视野，并与油门/方向触控区保持间距
-- Android 版本更新为 `1.2.3 (7)`
-
 ## v1.3.0 更新
 
 - 新增“霓虹道具大奖赛”：3 圈、6 车、12 个赛道道具箱，支持氮气瓶、能量盾、电磁脉冲和冲击波
@@ -32,6 +27,11 @@
 - 漂移比赛以 38% 氮气起步，持续有效漂移按侧滑质量即时充能，漂移结束再结算额外氮气并显示 `N2O` 获得量
 - 道具赛独立保存最佳成绩和比赛次数，不影响已有竞速、计时和漂移记录
 - Android 版本更新为 `1.3.0 (8)`
+
+## v1.2.3 更新
+
+- 优化手机网页与 Android WebView 的速度仪表：改为右下方紧凑半透明布局，避开屏幕中央赛道视野，并与油门/方向触控区保持间距
+- Android 版本更新为 `1.2.3 (7)`
 
 ## v1.2.2 更新
 
@@ -167,11 +167,11 @@ artifacts/apk/neon-apex-release.apk
 artifacts/aab/neon-apex-release.aab
 ```
 
-当前已部署产物（2026-08-10，`v1.3.0 (8)`）：
+当前已部署产物（2026-08-11，`v1.4.0 (9)`）：
 
 ```text
-APK SHA-256  9461ea152bd7daf9d8c000522d22f04b156614fa61edf73248741fb70e91d166
-AAB SHA-256  33438453e678095554e083785c752393afb0dae72d7e33dbba4d1bd5adf2d590
+APK SHA-256  c467c9d825fccb114b4be6eb04eac684e0668646ce5aa1bacbb3f9398a33519d
+AAB SHA-256  5f29351994784d15b32b733e37858d6d5b16b896de2b88b0db4e09c34e16e461
 证书 SHA-256 165b461910953729306cf12464a993ea300d44edb553f0f79191e44d72b43b6c
 ```
 
@@ -209,7 +209,11 @@ neon-apex/
 │   ├── race-modes.js          # 赛事模式的共享定义
 │   ├── race-system.js         # AI 对手、排名和比赛结果
 │   ├── item-race.js           # 道具箱、道具效果和 AI 道具行为
-│   ├── world.js               # 赛道、城市、港口和山路场景
+│   ├── world.js               # 夜港场景总装配与兼容导出
+│   ├── night-track.js         # 夜港赛道曲线与通用放置几何
+│   ├── night-atmosphere.js    # 夜空、雨、星体和灯光
+│   ├── night-districts.js     # 港口、跨桥和山路分区
+│   ├── procedural-vehicle.js  # 程序化主车与 AI 车辆
 │   ├── day-world.js           # 独立白天山谷赛道与场景
 │   ├── scenic-worlds.js       # 雪岭、峡谷、海岸路线与高细节场景
 │   ├── track-catalog.js       # 首页与运行时共享的地图信息
@@ -224,6 +228,7 @@ neon-apex/
 ├── public/assets/             # 车辆、地图封面、HDRI 和 PBR 材质资源
 ├── tests/                     # 逻辑、触控和 Playwright 视觉测试
 ├── server/                    # 2–6 人房间和 WebSocket 状态服务
+│   └── race-validation.mjs    # 联机进度、位置和完赛校验
 ├── scripts/                   # APK 构建与线上部署脚本
 ├── android/                   # 原生 Android 工程、正式签名配置和启动器图标引用
 ├── dist/                      # Vite 生产构建（可再生成）
@@ -249,15 +254,14 @@ npm run deploy:server
 
 ## 飞书交付
 
-当前服务器使用 `cc-connect` 将发布包发送到既有飞书会话，无需在项目中保存飞书应用密钥：
+当前服务器使用 `cc-connect` 将 APK 发送到既有飞书会话，无需在项目中保存飞书应用密钥。默认只发送 APK；AAB 仅用于应用商店发布，不作为飞书附件：
 
 ```bash
 cc-connect daemon status
 cc-connect sessions list
 cc-connect send -p codex-relay_d03f2587 \
   -m "Neon Apex v1.4.0 五地图 release" \
-  --file /root/neon-apex/artifacts/apk/neon-apex-release.apk \
-  --file /root/neon-apex/artifacts/aab/neon-apex-release.aab
+  --file /root/neon-apex/artifacts/apk/neon-apex-release.apk
 ```
 
-仅在 `cc-connect` 返回 `Message sent successfully.` 后才能确认交付完成。
+仅在 `cc-connect` 返回 `Message sent successfully.` 后才能确认交付完成。若遇到 HTTP 429，应保持不超过 5 RPM，等待后继续重试。

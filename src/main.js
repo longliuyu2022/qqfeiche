@@ -686,7 +686,7 @@ function sendOnlineState(now = performance.now()) {
     z: vehicle.position.z,
     yaw: vehicle.heading,
     speed: vehicle.state.forwardSpeed,
-    progress: vehicle.state.lapsCompleted + vehicle.state.lapProgress,
+    progress: Math.min(vehicle.state.totalLaps, vehicle.state.lapsCompleted + vehicle.state.lapProgress),
     lap: vehicle.lap,
     finished: vehicle.state.finished,
     finishTime: vehicle.state.result?.finalTime ?? null,
@@ -696,7 +696,7 @@ function sendOnlineState(now = performance.now()) {
 function getOnlineStandings() {
   const entries = [{
     id: onlineSession.selfId,
-    progress: vehicle.state.lapsCompleted + vehicle.state.lapProgress,
+    progress: Math.min(vehicle.state.totalLaps, vehicle.state.lapsCompleted + vehicle.state.lapProgress),
     finished: vehicle.state.finished,
     finishTime: vehicle.state.result?.finalTime ?? Infinity,
     isPlayer: true,
@@ -1405,7 +1405,7 @@ function animate() {
       if (loadingLabel) loadingLabel.textContent = '赛道已就绪，等待其他车手';
       onlineSession.markReady();
     } else {
-      setTimeout(() => ui.loading.classList.add('done'), 480);
+      ui.loading.classList.add('done');
     }
   }
 }
