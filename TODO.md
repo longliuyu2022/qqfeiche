@@ -1,8 +1,8 @@
 # Neon Apex 待完善清单
 
-> 记录日期：2026-08-11
+> 记录日期：2026-08-11（当日更新）
 > 审查基线：本地工作区 `v1.3.0`（`package.json`），线上 build `20260810T134910Z`
-> 状态：**仅记录，未做任何改动**
+> 版本控制：已初始化，初始提交 `b162a67`（分支 `main`）
 
 审查方式：跑通 `npm test`（8 个逻辑测试全部通过），对照 `src/`、`server/`、`tests/`、`dist/`、
 `android/`、线上健康端点和 `public/assets/` 的实际内容。
@@ -18,19 +18,14 @@
 `server/index.mjs:10`、`index.html:107-109`、`tests/tracks.mjs`、`tests/maps-browser.mjs` 都已就位，
 `npm run test:tracks` 能跑出五条赛道的长度和场景对象数。但收尾工作全部缺失。
 
-### 1. `coast-cover.png` 缺失，蔚蓝海岸封面是坏的
+### 1. ~~`coast-cover.png` 缺失~~ ✅ 已在工作区补齐
 
-- `src/style.css:142` 引用 `/assets/tracks/coast-cover.png`
-- `public/assets/tracks/` 实际只有 `alpine-cover.png`、`canyon-cover.png`
-- 线上请求该路径返回 `content-type: text/html`（SPA 兜底的 index.html），
-  首页第 5 张赛道卡片只剩 `background-color: #10202a` 兜底
+2026-08-11 11:12 生成了 `public/assets/tracks/coast-cover.png`，
+`src/style.css:142` 的引用不再落空，`dist/assets/tracks/` 三张封面齐全。
 
-验证：
-
-```bash
-ls public/assets/tracks/
-curl -s -I https://gaokao.aiimage.icu/assets/tracks/coast-cover.png | grep -i content-type
-```
+遗留：该文件 3.14 MB，且尚未部署到线上——线上请求
+`/assets/tracks/coast-cover.png` 仍返回 SPA 兜底的 `text/html`。
+体积问题并入第 3 条，部署问题并入第 2 条。
 
 ### 2. 版本号与文档没跟上，产物未发布
 
@@ -50,10 +45,15 @@ curl -s -I https://gaokao.aiimage.icu/assets/tracks/coast-cover.png | grep -i co
 | --- | --- | --- |
 | `alpine-cover.png` | 1536×1024 | 2.77 MB |
 | `canyon-cover.png` | 1536×1024 | 2.66 MB |
-| `coast-cover.png` | — | 缺失 |
+| `coast-cover.png` | 1536×1024 | 3.14 MB |
+| **合计** | | **8.56 MB** |
 
-这些图只显示在 `.track-swatch` 的 **42×42** 区域（`src/style.css:139`）。
-三张齐了约 8 MB，纯首屏带宽浪费。压到 128px WebP 单张可进 10 KB 以内。
+这些图只显示在 `.track-swatch` 的 **42×42** 区域（`src/style.css:139`），
+即每张图的像素量是实际显示需求的约 890 倍。压到 128px WebP 单张可进 10 KB 以内，
+三张合计从 8.56 MB 降到 30 KB 量级。
+
+这 8.56 MB 已经进了首次提交，后续每次重新生成封面都会在仓库里再叠一份，
+**越早换成小图越好**。
 
 附带的一致性问题：`night` / `day` 用 CSS 渐变（`src/style.css:140-141`），
 新三条用照片，同一排卡片两种视觉语言。
@@ -77,19 +77,23 @@ for f in tests/*.mjs; do b=$(basename "$f" .mjs); \
 
 ## 🟡 P1 — 工程化缺口
 
-### 5. 整个项目没有 Git 仓库
+### 5. ~~整个项目没有 Git 仓库~~ ✅ 已完成
 
-```
-$ git status
-fatal: not a git repository (or any of the parent directories): .git
-```
+2026-08-11 完成 `git init`，分支 `main`，初始提交 `b162a67`（96 个文件，`.git` 34 MB）。
 
-9600 行源码 + Android 正式签名工程，无历史、无法回滚、无法 diff 排查。
-目前**最大的单点风险**。`.gitignore` 已经写好（覆盖 `node_modules/`、`dist/`、
-`.android-sdk/`、`android/app/build/` 等），却一直没 `git init`。
+`.gitignore` 增补了四类排除项：
 
-注意：初始化时要确认签名材料 `~/.config/neon-apex/signing.properties` 和
-`*.jks` 绝不进仓库（README 已声明该纪律）。
+| 新增 | 体积 | 理由 |
+| --- | --- | --- |
+| `android/app/src/main/assets/` | 22 MB | `scripts/build-apk.sh:24` 从 `dist/` 复制生成，纯副本 |
+| `artifacts/apk/`、`artifacts/aab/` | 37 MB | 可由 `build-apk.sh` 重新生成，与已忽略的 `dist/` 同类 |
+| `.mindfs/` | 4.3 MB | 会话与任务状态，非源码 |
+| `*.jks`、`*.keystore`、`signing.properties` | — | 防御性；签名材料在 `~/.config/neon-apex/`，项目内本来就没有 |
+
+APK/AAB 文件仍在 `artifacts/` 下，只是不跟踪。若决定把发布产物也存进仓库，
+去掉对应两行即可。
+
+提交身份用的是仓库级配置 `Neon Apex Dev <dev@neon-apex.local>`（全局配置为空，未改动）。
 
 ### 6. 联机服务缺连接层防护
 
@@ -121,12 +125,12 @@ fatal: not a git repository (or any of the parent directories): .git
 
 ## 建议执行顺序
 
-1. `git init` 并提交当前状态（先把现状锁住，后续都可回滚）
-2. 补 `coast-cover.png`，把三张封面压成小尺寸 WebP
-3. 接上 `test:maps`，跑一遍浏览器回归确认封面和画布
-4. 统一 bump 到 `v1.4.0`：README + `package.json` + `versionCode 9`
+1. ~~`git init` 并提交当前状态~~ ✅ 已完成（`b162a67`）
+2. 把三张封面压成小尺寸 WebP（第 3 条）——越早做仓库越少背包袱
+3. 接上 `test:maps`，跑一遍浏览器回归确认封面和画布（第 4 条）
+4. 统一 bump 到 `v1.4.0`：README + `package.json` + `versionCode 9`（第 2 条）
 5. 构建 APK/AAB，`npm run deploy` + `npm run deploy:server` 发布
-6. 服务端限流单独做一轮
+6. 服务端限流单独做一轮（第 6 条）
 
 ---
 
