@@ -2,10 +2,10 @@ export const ONLINE_RACE_LAPS = 3;
 
 export const TRACK_LENGTH_METERS = Object.freeze({
   night: 2071,
-  day: 2128,
-  alpine: 2186,
-  canyon: 2455,
-  coast: 2437,
+  day: 1726,
+  alpine: 1846,
+  canyon: 2008,
+  coast: 1997,
 });
 
 const MAX_VALID_SPEED_MPS = 150;

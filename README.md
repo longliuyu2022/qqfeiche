@@ -4,11 +4,17 @@
 
 > 项目根目录：`/root/neon-apex`
 >
-> 当前版本：`v1.4.0`（Android `versionCode 9`）
+> 当前版本：`v1.4.1`（Android `versionCode 10`）
 >
 > 在线游戏：<https://gaokao.aiimage.icu/>
 >
 > Android 下载：[APK](https://gaokao.aiimage.icu/downloads/neon-apex-release.apk) · [AAB](https://gaokao.aiimage.icu/downloads/neon-apex-release.aab)
+
+## v1.4.1 更新
+
+- 删除晴川、雪岭、峡谷和海岸地图闭合处与反向车道重叠的 U 型回头支路，避免驶过后被识别为逆向
+- 重新同步联机服务端的五地图长度，并增加闭合方向、最小转弯半径和同向路线采样回归测试
+- Android 版本更新为 `1.4.1 (10)`
 
 ## v1.4.0 更新
 
@@ -167,11 +173,11 @@ artifacts/apk/neon-apex-release.apk
 artifacts/aab/neon-apex-release.aab
 ```
 
-当前已部署产物（2026-08-11，`v1.4.0 (9)`）：
+当前已部署产物（2026-08-11，`v1.4.1 (10)`）：
 
 ```text
-APK SHA-256  c467c9d825fccb114b4be6eb04eac684e0668646ce5aa1bacbb3f9398a33519d
-AAB SHA-256  5f29351994784d15b32b733e37858d6d5b16b896de2b88b0db4e09c34e16e461
+APK SHA-256  c9e456ee877bfb4f96d25facc596c0c75919a73f3752c9fa09b94f679c5db8c8
+AAB SHA-256  776c258796db514d6a7ba8a53fb52885057c4df0322a9708a31c73e4b86b7f61
 证书 SHA-256 165b461910953729306cf12464a993ea300d44edb553f0f79191e44d72b43b6c
 ```
 
@@ -260,7 +266,7 @@ npm run deploy:server
 cc-connect daemon status
 cc-connect sessions list
 cc-connect send -p codex-relay_d03f2587 \
-  -m "Neon Apex v1.4.0 五地图 release" \
+  -m "Neon Apex v1.4.1 路线修复 release" \
   --file /root/neon-apex/artifacts/apk/neon-apex-release.apk
 ```
 
