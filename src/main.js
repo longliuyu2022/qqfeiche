@@ -32,6 +32,7 @@ import { createHeroCarVariant } from './procedural-vehicle.js';
 import { createGhostPlayer, createGhostRecorder, serializeGhost, deserializeGhost } from './ghost.js';
 import { earnCoins, getItemById, isOwned, loadWallet, saveWallet } from './shop.js';
 import { createShopUi } from './shop-ui.js';
+import { createLiveryTexture } from './decals.js';
 import {
   applyRaceResult as applyRankResult,
   formatRank,
@@ -983,24 +984,43 @@ function renderWallet() {
 }
 
 /**
- * Applies the equipped shop paint to whichever hero car is in the scene. The
- * glTF car exposes its body material by name; procedural variants hand theirs
- * over through userData.paint.
+ * Applies the equipped shop paint and decal to whichever hero car is in the
+ * scene. The glTF car exposes its body material by name; procedural variants
+ * hand theirs over through userData.paint.
  */
 function applyEquippedPaint(target = hero, currentWallet = wallet) {
   const paintItem = currentWallet.equipped?.paint ? getItemById(currentWallet.equipped.paint) : null;
+  const decalItem = currentWallet.equipped?.decal ? getItemById(currentWallet.equipped.decal) : null;
   const bodyColor = paintItem?.payload?.color ?? ownedCar.color;
   const accentColor = paintItem?.payload?.accentColor ?? ownedCar.accentColor;
-  if (target.userData.paint?.color) {
-    target.userData.paint.color.set(bodyColor);
-  } else {
+  const livery = createLiveryTexture({
+    baseColor: bodyColor,
+    pattern: decalItem?.payload?.pattern,
+    patternColor: decalItem?.payload?.color ?? '#ffffff',
+  });
+
+  const bodyMaterials = [];
+  if (target.userData.paint) bodyMaterials.push(target.userData.paint);
+  else {
     target.traverse((node) => {
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       for (const material of materials) {
-        if (material?.name === 'Paint 1 Carmine') material.color.set(bodyColor);
+        if (material?.name === 'Paint 1 Carmine') bodyMaterials.push(material);
       }
     });
   }
+  for (const material of bodyMaterials) {
+    material.map?.dispose?.();
+    if (livery) {
+      material.map = livery;
+      material.color.set(0xffffff);
+    } else {
+      material.map = null;
+      material.color.set(bodyColor);
+    }
+    material.needsUpdate = true;
+  }
+
   for (const flame of target.userData.nitroFlames ?? []) {
     flame.material?.color?.set(accentColor);
   }

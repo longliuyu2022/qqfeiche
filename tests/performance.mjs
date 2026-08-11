@@ -76,24 +76,29 @@ const QUALITY_SAVING = 0.9;
 // exactly flat across five restarts, so this only absorbs a stray pooled buffer.
 const LEAK_TOLERANCE = 2;
 
-// Budgets are the peak measured on 2026-08-12 against the night track in race mode, rounded
-// up by about 25%. Draw calls and triangles are viewport independent (they follow the scene,
-// not the pixels); the high tier costs twice as much because the shadow pass redraws the
-// scene. Measured peaks, for reference when these need re-fitting:
+// Budgets are the peak measured on 2026-08-12 against the night track in race mode.
+// Draw calls and triangles are viewport independent (they follow the scene, not the pixels)
+// and get a 1.25x margin. Resident geometries and textures get a wider margin because
+// three.js uploads a geometry the first time it is drawn, so the count keeps creeping up
+// with how much of the world the sample has driven past: the same build reports 245
+// geometries after 12 sampled frames per state and 293 after the default 120.
+// Measured peaks at FRAME_SAMPLES=12, for reference when these need re-fitting:
 //   mobile-portrait  balanced 241 calls / 337722 tris / 245 geo / 54 tex
 //   mobile-portrait  high     490 calls / 610848 tris / 301 geo / 55 tex
 //   mobile-landscape balanced 251 calls / 352810 tris / 267 geo / 57 tex
 //   mobile-landscape high     504 calls / 624036 tris / 317 geo / 58 tex
 //   desktop          balanced 248 calls / 352770 tris / 265 geo / 56 tex
 //   desktop          high     498 calls / 619056 tris / 315 geo / 57 tex
+// and at the default FRAME_SAMPLES=120:
+//   mobile-portrait  balanced 246 calls / 347926 tris / 293 geo / 55 tex
 const cases = [
   {
     name: 'mobile-portrait',
     viewport: { width: 390, height: 844 },
     mobile: true,
     budgets: {
-      balanced: { calls: 300, triangles: 425000, geometries: 310, textures: 70 },
-      high: { calls: 615, triangles: 765000, geometries: 380, textures: 70 },
+      balanced: { calls: 300, triangles: 425000, geometries: 370, textures: 70 },
+      high: { calls: 615, triangles: 765000, geometries: 450, textures: 70 },
     },
   },
   {
@@ -101,8 +106,8 @@ const cases = [
     viewport: { width: 844, height: 390 },
     mobile: true,
     budgets: {
-      balanced: { calls: 315, triangles: 445000, geometries: 335, textures: 75 },
-      high: { calls: 630, triangles: 780000, geometries: 400, textures: 75 },
+      balanced: { calls: 315, triangles: 445000, geometries: 400, textures: 75 },
+      high: { calls: 630, triangles: 780000, geometries: 475, textures: 75 },
     },
   },
   {
@@ -110,8 +115,8 @@ const cases = [
     viewport: { width: 1280, height: 720 },
     mobile: false,
     budgets: {
-      balanced: { calls: 310, triangles: 445000, geometries: 335, textures: 70 },
-      high: { calls: 625, triangles: 775000, geometries: 395, textures: 75 },
+      balanced: { calls: 310, triangles: 445000, geometries: 400, textures: 70 },
+      high: { calls: 625, triangles: 775000, geometries: 470, textures: 75 },
     },
   },
 ].filter((testCase) => !process.env.CASE || process.env.CASE === testCase.name);
