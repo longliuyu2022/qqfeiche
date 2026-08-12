@@ -10,6 +10,7 @@ import {
 } from './night-track.js';
 import { addWorldLights, createAtmosphere, createRain, createSky } from './night-atmosphere.js';
 import { createHarborDistrict, createMountainRoad } from './night-districts.js';
+import { attachEnvironmentHLOD } from './environment-assets.js';
 // Shared scenery-placement rules live in scenic-worlds.js so every map obeys the
 // same "stay clear of the whole circuit" contract. See that file for details.
 import {
@@ -1989,6 +1990,42 @@ function createTracksideNature(root, random, clearance) {
   root.add(rocks);
 }
 
+function createNightEnvironmentHLOD(root, qualityTier, clearance, options) {
+  const placements = [];
+  const addTrackside = (kind, progress, direction, radius, distance, scale, yOffset = 0, rotationOffset = 0) => {
+    const { point, tangent, side } = tangentFrame(progress);
+    const candidate = clearance.place((attempt) => {
+      const offset = clearance.requiredDistance(radius, PROP_CLEARANCE) + distance + attempt * 18;
+      return {
+        x: point.x + side.x * direction * offset,
+        z: point.z + side.z * direction * offset,
+        radius,
+        clearance: PROP_CLEARANCE,
+      };
+    }, 5);
+    if (!candidate) return;
+    placements.push({
+      kind,
+      position: [candidate.x, point.y + yOffset, candidate.z],
+      rotation: [0, Math.atan2(-tangent.z, tangent.x) + rotationOffset, 0],
+      scale,
+      anchor: progress,
+    });
+  };
+
+  // Professional modular facades form a detailed foreground layer while the
+  // existing instanced skyline remains the distant HLOD/collision fallback.
+  addTrackside('apartment', 0.035, 1, 18, 9, [0.62, 0.72, 0.62], -2, Math.PI / 2);
+  addTrackside('factory', 0.19, -1, 19, 12, [0.58, 0.65, 0.58], -2, -Math.PI / 2);
+  addTrackside('boulder', 0.72, 1, 6, 11, [7, 7, 7], -2, 0.6);
+  addTrackside('fir', 0.84, -1, 15, 13, [6, 6, 6], -2.4, 1.1);
+  return attachEnvironmentHLOD(root, qualityTier, placements, {
+    name: 'NeonCityEnvironmentHLOD',
+    bakedLighting: true,
+    onError: options.onEnvironmentAssetError,
+  });
+}
+
 function createLamps(root) {
   const spacing = 42;
   const count = Math.floor(TRACK_CURVE.getLength() / spacing);
@@ -2060,6 +2097,7 @@ export function createWorld(scene, options = {}) {
   createCity(world, random, clearance);
   const urbanPortalMaterial = createUrbanRoad(world, random, clearance);
   createTracksideNature(world, random, clearance);
+  const environmentReady = createNightEnvironmentHLOD(world, qualityTier, clearance, options);
   addTagged(world, CLEARANCE_EXEMPT.FURNITURE, () => createRoadsideDetails(world));
   addTagged(world, CLEARANCE_EXEMPT.FURNITURE, () => createLamps(world));
   const stars = addTagged(world, CLEARANCE_EXEMPT.BACKDROP, () => createAtmosphere(world, random, { qualityTier }));
@@ -2083,6 +2121,7 @@ export function createWorld(scene, options = {}) {
     startLine,
     districts: { harbor, mountain, city: world.getObjectByName('District_VerticalCity') },
     animated,
+    environmentReady,
     update,
   };
 }

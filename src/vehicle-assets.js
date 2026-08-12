@@ -130,25 +130,49 @@ function tuneMaterials(root, maxAnisotropy) {
 
 function createWheelPivots(source) {
   source.updateMatrixWorld(true);
-  return wheelNames.map((name) => {
+  return wheelNames.map((name, index) => {
     const wheel = source.getObjectByName(name);
     if (!wheel?.parent) {
-      const placeholder = new THREE.Group();
-      placeholder.name = `${name}FallbackPivot`;
-      source.add(placeholder);
-      return placeholder;
+      const suspensionRoot = new THREE.Group();
+      suspensionRoot.name = `${name}FallbackSuspension`;
+      const steeringKnuckle = new THREE.Group();
+      steeringKnuckle.name = `${name}FallbackKnuckle`;
+      const wheelPivot = new THREE.Group();
+      wheelPivot.name = `${name}FallbackPivot`;
+      steeringKnuckle.add(wheelPivot);
+      suspensionRoot.add(steeringKnuckle);
+      source.add(suspensionRoot);
+      return {
+        suspensionRoot,
+        steeringKnuckle,
+        wheel: wheelPivot,
+        restPosition: suspensionRoot.position.clone(),
+        index,
+      };
     }
 
     const parent = wheel.parent;
     const center = new THREE.Box3().setFromObject(wheel).getCenter(new THREE.Vector3());
-    const pivot = new THREE.Group();
-    pivot.name = `${name}Pivot`;
-    parent.add(pivot);
+    const suspensionRoot = new THREE.Group();
+    suspensionRoot.name = `${name}Suspension`;
+    const steeringKnuckle = new THREE.Group();
+    steeringKnuckle.name = `${name}Knuckle`;
+    const wheelPivot = new THREE.Group();
+    wheelPivot.name = `${name}Pivot`;
+    parent.add(suspensionRoot);
     parent.updateMatrixWorld(true);
-    pivot.position.copy(parent.worldToLocal(center.clone()));
-    pivot.updateMatrixWorld(true);
-    pivot.attach(wheel);
-    return pivot;
+    suspensionRoot.position.copy(parent.worldToLocal(center.clone()));
+    suspensionRoot.add(steeringKnuckle);
+    steeringKnuckle.add(wheelPivot);
+    wheelPivot.updateMatrixWorld(true);
+    wheelPivot.attach(wheel);
+    return {
+      suspensionRoot,
+      steeringKnuckle,
+      wheel: wheelPivot,
+      restPosition: suspensionRoot.position.clone(),
+      index,
+    };
   });
 }
 
@@ -458,7 +482,8 @@ export async function createDetailedHeroCar(options = {}) {
     source.name = 'CarConceptSource';
     removeNonVisualNodes(source);
     tuneMaterials(source, maxAnisotropy);
-    const wheels = createWheelPivots(source);
+    const wheelRigs = createWheelPivots(source);
+    const wheels = wheelRigs.map((rig) => rig.wheel);
     const modelFrame = normalizeModel(source, length, rideClearance);
 
     const car = new THREE.Group();
@@ -469,11 +494,18 @@ export async function createDetailedHeroCar(options = {}) {
     car.add(poseRoot);
     car.updateMatrixWorld(true);
     const bounds = new THREE.Box3().setFromObject(modelFrame);
+    // Wheels stay in the vehicle frame while the sprung body pitches, rolls
+    // and heaves. Object3D.attach preserves the asset-authored wheel transform.
+    wheelRigs.forEach((rig) => {
+      car.attach(rig.suspensionRoot);
+      rig.restPosition.copy(rig.suspensionRoot.position);
+    });
     const effects = createRuntimeEffects(car, bounds, true, poseRoot, wheels, modelFrame.scale.x);
 
     car.userData = {
       ...effects,
       wheels,
+      wheelRigs,
       poseRoot,
       modelFrame,
       assetRoot: source,

@@ -29,6 +29,36 @@ function setShadow(object, cast = true, receive = true) {
   return object;
 }
 
+function createWheelRig(car, wheel, index) {
+  const restPosition = wheel.position.clone();
+  const suspensionRoot = new THREE.Group();
+  suspensionRoot.name = `Suspension${index}`;
+  suspensionRoot.position.copy(restPosition);
+  const steeringKnuckle = new THREE.Group();
+  steeringKnuckle.name = `SteeringKnuckle${index}`;
+  wheel.name ||= `WheelSpin${index}`;
+  wheel.position.set(0, 0, 0);
+  steeringKnuckle.add(wheel);
+  suspensionRoot.add(steeringKnuckle);
+  car.add(suspensionRoot);
+  return { suspensionRoot, steeringKnuckle, wheel, restPosition };
+}
+
+function finalizeAnimatedChassis(car, wheels, groundEffects = []) {
+  const originalChildren = [...car.children];
+  wheels.forEach((wheel) => wheel.removeFromParent());
+  const wheelRigs = wheels.map((wheel, index) => createWheelRig(car, wheel, index));
+  const rigRoots = new Set(wheelRigs.map((rig) => rig.suspensionRoot));
+  const fixedRoots = new Set(groundEffects.filter(Boolean));
+  const poseRoot = new THREE.Group();
+  poseRoot.name = `${car.name || 'Vehicle'}PoseRoot`;
+  car.add(poseRoot);
+  originalChildren.forEach((child) => {
+    if (!rigRoots.has(child) && !fixedRoots.has(child) && child.parent === car) poseRoot.add(child);
+  });
+  return { wheels: wheelRigs.map((rig) => rig.wheel), wheelRigs, poseRoot };
+}
+
 function loftGeometry(rings) {
   const positions = [];
   const indices = [];
@@ -228,8 +258,9 @@ function createCar(color, hero = false, accentOverride = null) {
     car.add(rimLight);
   }
 
+  const animatedChassis = finalizeAnimatedChassis(car, wheels, [underglow]);
   car.userData = {
-    wheels,
+    ...animatedChassis,
     brakeLights,
     nitroFlames,
     flameMaterial,
@@ -360,8 +391,9 @@ function finalizeVariant(car, context, wheels, brakeLights, flames, underglow) {
   rimLight.position.set(0, 3.2, -1.1);
   car.add(rimLight);
 
+  const animatedChassis = finalizeAnimatedChassis(car, wheels, [underglow]);
   car.userData = {
-    wheels,
+    ...animatedChassis,
     brakeLights,
     nitroFlames: flames.nitroFlames,
     flameMaterial: flames.flameMaterial,

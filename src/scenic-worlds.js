@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { attachEnvironmentHLOD } from './environment-assets.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const FORWARD = new THREE.Vector3(0, 0, 1);
@@ -834,6 +835,55 @@ function createRockFormations(root, curve, theme, random, qualityTier, kind, cle
   return rocks;
 }
 
+function createScenicEnvironmentHLOD(root, trackId, qualityTier, curve, clearance, options) {
+  const placements = [];
+  const addTrackside = (assetKind, progress, direction, radius, distance, scale, yOffset = 0, rotationOffset = 0) => {
+    const point = new THREE.Vector3();
+    const tangent = new THREE.Vector3();
+    const side = new THREE.Vector3();
+    trackFrame(curve, progress, point, tangent, side);
+    const outward = direction ?? clearance.outwardSign(point, side);
+    const candidate = clearance.place((attempt) => {
+      const offset = clearance.requiredDistance(radius, assetKind === 'mountainside' ? TERRAIN_CLEARANCE : PROP_CLEARANCE)
+        + distance + attempt * 22;
+      return {
+        x: point.x + side.x * outward * offset,
+        z: point.z + side.z * outward * offset,
+        radius,
+        clearance: assetKind === 'mountainside' ? TERRAIN_CLEARANCE : PROP_CLEARANCE,
+      };
+    }, 5);
+    if (!candidate) return;
+    placements.push({
+      kind: assetKind,
+      position: [candidate.x, point.y + yOffset, candidate.z],
+      rotation: [0, Math.atan2(-tangent.z, tangent.x) + rotationOffset, 0],
+      scale,
+      anchor: progress,
+    });
+  };
+
+  if (trackId === 'alpine') {
+    addTrackside('mountainside', 0.18, null, 78, 42, [12, 12, 12], -7);
+    addTrackside('mountainside', 0.63, null, 65, 55, [10, 10, 10], -6, Math.PI);
+    addTrackside('fir', 0.36, 1, 15, 12, [6, 6, 6], -3);
+    addTrackside('fir', 0.82, -1, 15, 18, [6.5, 6.5, 6.5], -3, 1.4);
+  } else if (trackId === 'canyon') {
+    addTrackside('mountainside', 0.29, null, 72, 58, [11, 11, 11], -10, 0.6);
+    addTrackside('boulder', 0.54, null, 8, 12, [8, 8, 8], -5, 0.3);
+    addTrackside('boulder', 0.88, null, 5, 16, [6, 6, 6], -4, 1.2);
+  } else {
+    addTrackside('boulder', 0.21, null, 5, 14, [7, 7, 7], -4, 0.7);
+    addTrackside('boulder', 0.68, null, 5, 18, [6.5, 6.5, 6.5], -4, 2.1);
+    addTrackside('fir', 0.44, -1, 14, 16, [6, 6, 6], -4, 0.4);
+  }
+  return attachEnvironmentHLOD(root, qualityTier, placements, {
+    name: `${trackId}EnvironmentHLOD`,
+    bakedLighting: true,
+    onError: options.onEnvironmentAssetError,
+  });
+}
+
 function createStartComplex(root, curve, theme) {
   const start = curve.getPointAt(0.002);
   const tangent = curve.getTangentAt(0.002).normalize();
@@ -1147,6 +1197,7 @@ export function createScenicWorld(scene, trackId, options = {}) {
   const road = createRoad(world, curve, theme, qualityTier, shortcuts);
   createRockFormations(world, curve, theme, random, qualityTier, trackId, clearance);
   createTracksideVegetation(world, curve, theme, random, qualityTier, trackId, clearance);
+  const environmentReady = createScenicEnvironmentHLOD(world, trackId, qualityTier, curve, clearance, options);
   const startLine = createStartComplex(world, curve, theme);
   const clouds = createClouds(world, theme, random, qualityTier);
   let weather = null;
@@ -1173,6 +1224,7 @@ export function createScenicWorld(scene, trackId, options = {}) {
     startLine,
     districts: { scenic: world },
     animated: { clouds, weather, aurora, ocean },
+    environmentReady,
     update(elapsed = 0) {
       clouds.rotation.y = elapsed * (trackId === 'canyon' ? 0.0005 : 0.0012);
       if (aurora) aurora.material.uniforms.time.value = elapsed;

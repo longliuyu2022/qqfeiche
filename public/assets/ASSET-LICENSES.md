@@ -19,3 +19,23 @@ The asset contains Khronos and 3D Commerce logos. Those marks retain their
 upstream `LicenseRef-LegalMark-Khronos` terms and are not endorsements of this
 project. See the upstream license notice before redistributing a modified asset.
 
+# Third-party environment assets
+
+The optimized environment GLB files under `environment/models/` are derived
+from Poly Haven source models. Poly Haven publishes these models and textures
+under CC0 1.0; the files were downloaded as 1K glTF sources, simplified into
+near/mid/far LODs with glTF-Transform, and compressed with Meshopt/WebP for
+browser delivery. The authoring `.bin` files are intentionally not shipped.
+
+| Asset | Source | License | Published levels |
+| --- | --- | --- | --- |
+| mountainside | https://polyhaven.com/a/mountainside | CC0 1.0 | near / mid / far |
+| boulder_01 | https://polyhaven.com/a/boulder_01 | CC0 1.0 | near / mid / far |
+| modular_urban_apartments_facade | https://polyhaven.com/a/modular_urban_apartments_facade | CC0 1.0 | near / mid / far |
+| modular_factory_facade | https://polyhaven.com/a/modular_factory_facade | CC0 1.0 | near / mid / far |
+| fir_sapling | https://polyhaven.com/a/fir_sapling | CC0 1.0 | near / mid / far |
+
+The runtime loader tags these nodes with `bakedLighting: true` and enables
+vertex/AO-ready material handling. Scene lights remain dynamic for weather and
+vehicle effects; no claim is made that these assets contain offline lightmap
+textures.

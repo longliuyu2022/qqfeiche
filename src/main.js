@@ -29,6 +29,7 @@ import { computeTrackFeatures, featureZonesForPhysics } from './track-features.j
 import { createDriftEffects } from './drift-effects.js';
 import { DEFAULT_CAR_ID, getCarById, applyCarPhysics } from './car-catalog.js';
 import { createHeroCarVariant } from './procedural-vehicle.js';
+import { computeVehicleAnimationPose } from './vehicle-animation.js';
 import { createGhostPlayer, createGhostRecorder, serializeGhost, deserializeGhost } from './ghost.js';
 import { earnCoins, getItemById, isOwned, loadWallet, saveWallet } from './shop.js';
 import { createShopUi } from './shop-ui.js';
@@ -170,7 +171,11 @@ composer.addPass(new OutputPass());
 
 const trackFeatures = computeTrackFeatures(trackCurve, { trackId: activeTrackId, roadWidth: 16 });
 const featureZones = featureZonesForPhysics(trackFeatures);
-const world = activeTrackRuntime.createWorld(scene, { qualityTier, shortcutZones: featureZones.shortcuts });
+const world = activeTrackRuntime.createWorld(scene, {
+  qualityTier,
+  shortcutZones: featureZones.shortcuts,
+  onEnvironmentAssetError: (error, kind) => runtimeMonitor.assetFailure(`environment:${kind}`, error),
+});
 const featureMeshes = buildTrackFeatureMeshes(trackFeatures, { theme: activeTrackId });
 scene.add(featureMeshes);
 const selectedCar = getCarById(preferences.carId);
@@ -365,6 +370,7 @@ let calloutTimeout = 0;
 let startDelay = 0;
 let capturePaused = false;
 let previousForwardSpeed = 0;
+let wheelTravelDistance = 0;
 let waitingForOnlineStart = isOnline;
 let lastNetworkSendAt = 0;
 let networkSequence = 0;
@@ -696,9 +702,9 @@ function updateCarVisuals(dt) {
   const safeDelta = Math.max(1 / 240, dt);
   const spin = vehicle.state.forwardSpeed * dt / 0.43;
   const wheelMotion = THREE.MathUtils.smoothstep(Math.abs(vehicle.speedKph), 35, 260);
-  (hero.userData.wheels ?? []).forEach((wheel, index) => {
+  const wheelRigs = hero.userData.wheelRigs ?? [];
+  (hero.userData.wheels ?? []).forEach((wheel) => {
     wheel.rotation.x = THREE.MathUtils.euclideanModulo(wheel.rotation.x + spin, Math.PI * 2);
-    if (index >= 2) wheel.rotation.y = vehicle.steering * 0.32;
   });
   for (const accent of hero.userData.wheelAccents ?? []) {
     accent.material.emissiveIntensity = 0.28 + wheelMotion * 0.58;
@@ -734,6 +740,38 @@ function updateCarVisuals(dt) {
     -0.09,
     0.09,
   );
+  wheelTravelDistance += Math.abs(vehicle.state.forwardSpeed) * dt;
+  const suspensionPose = computeVehicleAnimationPose({
+    distance: wheelTravelDistance,
+    speedPose,
+    steering: vehicle.steering,
+    longitudinalLoad: longitudinalAcceleration / 9.81,
+    lateralLoad,
+    collisionImpact: vehicle.state.collisionImpact,
+  });
+  wheelRigs.forEach((rig, index) => {
+    const wheelPose = suspensionPose.wheels[index];
+    if (!wheelPose) return;
+    rig.suspensionRoot.position.y = THREE.MathUtils.damp(
+      rig.suspensionRoot.position.y,
+      rig.restPosition.y + wheelPose.suspensionTravel,
+      18,
+      dt,
+    );
+    rig.steeringKnuckle.rotation.y = THREE.MathUtils.damp(
+      rig.steeringKnuckle.rotation.y,
+      wheelPose.steerAngle,
+      16,
+      dt,
+    );
+    rig.steeringKnuckle.rotation.z = THREE.MathUtils.damp(
+      rig.steeringKnuckle.rotation.z,
+      wheelPose.camberAngle,
+      11,
+      dt,
+    );
+    rig.suspensionRoot.userData.compression = wheelPose.suspensionTravel;
+  });
   poseRoot.rotation.x = THREE.MathUtils.damp(poseRoot.rotation.x, pitchTarget, 7.5, dt);
   poseRoot.rotation.z = THREE.MathUtils.damp(poseRoot.rotation.z, rollTarget, 6.8, dt);
   const suspensionNoise = (
@@ -741,7 +779,7 @@ function updateCarVisuals(dt) {
     + Math.sin(elapsed * 21.7 + 0.8) * 0.42
     + Math.sin(elapsed * 7.3 + 2.1) * 0.26
   ) * speedPose * 0.008;
-  const suspensionOffset = suspensionNoise + vehicle.state.collisionImpact * 0.018;
+  const suspensionOffset = suspensionNoise * 0.42 + suspensionPose.heave;
   if (poseRoot === hero) {
     hero.position.y = vehicle.position.y + suspensionOffset;
   } else {
@@ -1203,6 +1241,7 @@ function prepareRace(modeId = activeMode) {
     nitro: STARTING_NITRO,
   });
   previousForwardSpeed = 0;
+  wheelTravelDistance = 0;
   raceSystem.configure({ totalLaps: mode.laps, rivalCount: isOnline ? 0 : mode.rivals });
   setRivalsVisible(isOnline ? 0 : mode.rivals);
   itemRace.reset({ enabled: !isOnline && activeMode === 'items' });
@@ -1492,6 +1531,7 @@ function showHome() {
     nitro: STARTING_NITRO,
   });
   previousForwardSpeed = 0;
+  wheelTravelDistance = 0;
   raceSystem.reset();
   itemRace.reset({ enabled: false });
   driftEffects.reset();

@@ -60,10 +60,12 @@ JS_FILE="$(find dist/assets -maxdepth 1 -type f -name 'index-*.js' -size +100c -
 CSS_FILE="$(find dist/assets -maxdepth 1 -type f -name 'index-*.css' -size +100c -print -quit)"
 PBR_FILE="$(find dist/assets/environment -type f -name '*.jpg' -size +100c -print -quit)"
 HDRI_FILE="$(find dist/assets/environment -type f -name '*.hdr' -size +100c -print -quit)"
+HLOD_FILE="$(find dist/assets/environment/models -type f -name '*-near.glb' -size +100c -print -quit)"
 test -n "${JS_FILE}"
 test -n "${CSS_FILE}"
 test -n "${PBR_FILE}"
 test -n "${HDRI_FILE}"
+test -n "${HLOD_FILE}"
 
 cp -a dist/. "${STAGE_DIR}/"
 APK_FILE="${PROJECT_DIR}/artifacts/apk/neon-apex-release.apk"
@@ -98,7 +100,7 @@ limited_curl --fail --silent --show-error --head --max-time 15 --write-out '%{ht
 HTTP_RESULT="$(<"${HTTP_RESULT_FILE}")"
 [[ "${HTTP_RESULT}" == 3*" ${SITE_URL}/" ]]
 
-for LOCAL_FILE in "${JS_FILE}" "${CSS_FILE}" "${PBR_FILE}" "${HDRI_FILE}" "dist/assets/CarConcept.glb"; do
+for LOCAL_FILE in "${JS_FILE}" "${CSS_FILE}" "${PBR_FILE}" "${HDRI_FILE}" "${HLOD_FILE}" "dist/assets/CarConcept.glb"; do
   REMOTE_PATH="${LOCAL_FILE#dist}"
   DOWNLOAD_FILE="${VERIFY_DIR}/$(basename "${LOCAL_FILE}")"
   limited_curl --fail --silent --show-error "${SITE_URL}${REMOTE_PATH}" --output "${DOWNLOAD_FILE}"
