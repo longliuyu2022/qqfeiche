@@ -21,6 +21,10 @@ const SHORTCUT_MAX_DEVIATION = 52;
 const SHORTCUT_MIN_SAVED = 12;
 const SHORTCUT_SELF_CLEARANCE = 22;
 const SHORTCUT_RADIUS_CEILING = 420;
+// Two branches on the same lap must stay clearly separate stretches of road:
+// their progress spans may never overlap and have to keep a 5% lap gap so a
+// driver always gets a stretch of normal racing line between them.
+const SHORTCUT_MIN_GAP = 0.05;
 
 // Relaxation ladder: prefer very straight road and full spacing, only loosen if a
 // track cannot fit every feature. The floor never drops below 62 m so features
@@ -194,12 +198,26 @@ function traceShortcut(curve, spine, startT, endT, spanT, trackLength, roadWidth
 }
 
 /**
+ * Circular gap between two non-wrapping progress spans. Returns a negative
+ * value when they overlap, otherwise the smaller of the two ways around.
+ */
+function spanGap(startA, endA, startB, endB) {
+  if (startA <= endB && startB <= endA) return -1;
+  const direct = startA > endB ? startA - endB : startB - endA;
+  const around = 1 - Math.max(endA, endB) + Math.min(startA, startB);
+  return Math.min(direct, around);
+}
+
+/**
  * Builds corner-cutting shortcuts: branch corridors that leave and rejoin the
  * racing line, trading a tighter, narrower line for a shorter lap distance.
- * Several span lengths are tried per corner and the biggest legal saving wins.
+ * Several span lengths are tried per corner and the biggest legal saving wins;
+ * corners are visited tightest-first and every accepted branch reserves its own
+ * span plus a 5% lap gap, so multiple branches never overlap or crowd.
+ * Returns the branches plus a note describing why fewer than `count` fit.
  */
 function buildShortcuts(curve, { id, roadWidth, trackLength, radii, sampleCount, takenZones, count }) {
-  if (count <= 0) return [];
+  if (count <= 0) return { shortcuts: [], shortfallReason: null };
   const spine = [];
   for (let index = 0; index < sampleCount; index += 1) {
     const t = index / sampleCount;
@@ -208,10 +226,11 @@ function buildShortcuts(curve, { id, roadWidth, trackLength, radii, sampleCount,
   }
 
   // A branch may bypass a pad mid-corner, but its mouth and exit have to be
-  // clean road: forking off a jump ramp is not a line anyone can drive.
-  const mouthIsClear = (startT, endT, spanT) => {
+  // clean road: forking off a jump ramp — or off another branch's mouth — is
+  // not a line anyone can drive.
+  const mouthIsClear = (startT, endT, spanT, blockedZones) => {
     const lead = Math.max(0.012, spanT * 0.2);
-    return takenZones.every((zone) => {
+    return blockedZones.every((zone) => {
       const clashesMouth = zone.end >= startT - 0.012 && zone.start <= startT + lead;
       const clashesExit = zone.end >= endT - lead && zone.start <= endT + 0.012;
       return !clashesMouth && !clashesExit;
@@ -226,11 +245,18 @@ function buildShortcuts(curve, { id, roadWidth, trackLength, radii, sampleCount,
   }
   candidates.sort((a, b) => a.radius - b.radius || a.centerT - b.centerT);
 
-  const shortcuts = [];
-  const used = [];
+  const accepted = [];
+  const placed = [];
+  const rejected = { crowded: 0, mouth: 0, geometry: 0 };
   for (const candidate of candidates) {
-    if (shortcuts.length >= count) break;
-    if (used.some((t) => circularDistance(candidate.centerT, t) < 0.18)) continue;
+    if (accepted.length >= count) break;
+    // Cheap pre-filter: a corner sitting inside (or right beside) an accepted
+    // branch can never host one of its own, whatever span it is given.
+    if (placed.some((zone) => candidate.centerT > zone.start - SHORTCUT_MIN_GAP
+      && candidate.centerT < zone.end + SHORTCUT_MIN_GAP)) {
+      rejected.crowded += 1;
+      continue;
+    }
 
     let best = null;
     for (const spanMeters of SHORTCUT_SPAN_OPTIONS) {
@@ -239,30 +265,56 @@ function buildShortcuts(curve, { id, roadWidth, trackLength, radii, sampleCount,
       const startT = candidate.centerT - spanT / 2;
       const endT = candidate.centerT + spanT / 2;
       if (startT < START_ZONE_MARGIN || endT > 1 - START_ZONE_MARGIN) continue;
-      if (!mouthIsClear(startT, endT, spanT)) continue;
+      if (placed.some((zone) => spanGap(startT, endT, zone.start, zone.end) < SHORTCUT_MIN_GAP)) {
+        rejected.crowded += 1;
+        continue;
+      }
+      if (!mouthIsClear(startT, endT, spanT, takenZones.concat(placed))) {
+        rejected.mouth += 1;
+        continue;
+      }
       const traced = traceShortcut(curve, spine, startT, endT, spanT, trackLength, roadWidth);
-      if (traced && (!best || traced.saved > best.traced.saved)) best = { traced, startT, endT, spanT };
+      if (!traced) {
+        rejected.geometry += 1;
+        continue;
+      }
+      if (!best || traced.saved > best.traced.saved) best = { traced, startT, endT, spanT };
     }
     if (!best) continue;
 
     const { traced, startT, endT } = best;
-    used.push(candidate.centerT);
-    shortcuts.push(Object.freeze({
-      id: `${id}-shortcut-${shortcuts.length + 1}`,
-      progress: startT,
-      endProgress: endT,
-      width: roadWidth * SHORTCUT_WIDTH_RATIO,
-      side: traced.side,
-      points: Object.freeze(traced.points),
-      entry: Object.freeze({ point: traced.startPoint, tangent: curve.getTangentAt(startT).normalize() }),
-      exit: Object.freeze({ point: traced.endPoint, tangent: curve.getTangentAt(endT).normalize() }),
-      maxDeviation: traced.maxDeviation,
-      pathLength: traced.pathLength,
-      savedMeters: traced.saved,
-      minTurnRadius: candidate.radius,
-    }));
+    placed.push({ start: startT, end: endT });
+    accepted.push({ traced, startT, endT, radius: candidate.radius });
   }
-  return shortcuts;
+
+  // Corners are picked tightest-first, but the branches ship in lap order so
+  // their ids read the way a driver meets them, like the pads and ramps do.
+  accepted.sort((a, b) => a.startT - b.startT);
+  const shortcuts = accepted.map(({ traced, startT, endT, radius }, index) => Object.freeze({
+    id: `${id}-shortcut-${index + 1}`,
+    progress: startT,
+    endProgress: endT,
+    width: roadWidth * SHORTCUT_WIDTH_RATIO,
+    side: traced.side,
+    points: Object.freeze(traced.points),
+    entry: Object.freeze({ point: traced.startPoint, tangent: curve.getTangentAt(startT).normalize() }),
+    exit: Object.freeze({ point: traced.endPoint, tangent: curve.getTangentAt(endT).normalize() }),
+    maxDeviation: traced.maxDeviation,
+    pathLength: traced.pathLength,
+    savedMeters: traced.saved,
+    minTurnRadius: radius,
+  }));
+
+  let shortfallReason = null;
+  if (shortcuts.length < count) {
+    const dominant = rejected.crowded >= rejected.geometry && rejected.crowded >= rejected.mouth
+      ? `no remaining corner keeps the ${SHORTCUT_MIN_GAP * 100}% gap from the branches already placed`
+      : rejected.geometry >= rejected.mouth
+        ? `remaining corners fail the corridor rules (saving, ${SHORTCUT_MAX_DEVIATION} m offset or ${SHORTCUT_SELF_CLEARANCE} m self clearance)`
+        : 'remaining corners have their mouth or exit blocked by a pad, ramp or another branch';
+    shortfallReason = `${shortcuts.length}/${count} placed: ${dominant}`;
+  }
+  return { shortcuts, shortfallReason };
 }
 
 /**
@@ -270,7 +322,7 @@ function buildShortcuts(curve, { id, roadWidth, trackLength, radii, sampleCount,
  * of a closed track curve. Same curve + options always yield the same layout;
  * the trackId string seeds the variation between maps.
  */
-export function computeTrackFeatures(curve, { trackId, roadWidth = 16, padCount = 6, rampCount = 2, shortcutCount = 1 } = {}) {
+export function computeTrackFeatures(curve, { trackId, roadWidth = 16, padCount = 6, rampCount = 2, shortcutCount = 2 } = {}) {
   if (!curve || typeof curve.getPointAt !== 'function' || typeof curve.getTangentAt !== 'function') {
     throw new Error('computeTrackFeatures requires a THREE.Curve-compatible closed curve');
   }
@@ -356,21 +408,24 @@ export function computeTrackFeatures(curve, { trackId, roadWidth = 16, padCount 
     });
   });
 
+  const requestedShortcuts = Math.max(0, Math.floor(shortcutCount) || 0);
+  const { shortcuts, shortfallReason } = buildShortcuts(curve, {
+    id,
+    roadWidth,
+    trackLength,
+    radii,
+    sampleCount: CURVATURE_SAMPLES,
+    takenZones: [
+      ...boostPads.map((pad) => ({ start: pad.progress, end: pad.endProgress })),
+      ...ramps.map((ramp) => ({ start: ramp.progress, end: ramp.endProgress })),
+    ],
+    count: requestedShortcuts,
+  });
+
   return Object.freeze({
     boostPads: Object.freeze(boostPads),
     ramps: Object.freeze(ramps),
-    shortcuts: Object.freeze(buildShortcuts(curve, {
-      id,
-      roadWidth,
-      trackLength,
-      radii,
-      sampleCount: CURVATURE_SAMPLES,
-      takenZones: [
-        ...boostPads.map((pad) => ({ start: pad.progress, end: pad.endProgress })),
-        ...ramps.map((ramp) => ({ start: ramp.progress, end: ramp.endProgress })),
-      ],
-      count: Math.max(0, Math.floor(shortcutCount)),
-    })),
+    shortcuts: Object.freeze(shortcuts),
     trackLength,
     meta: Object.freeze({
       trackId: id,
@@ -378,6 +433,10 @@ export function computeTrackFeatures(curve, { trackId, roadWidth = 16, padCount 
       curvatureSamples: CURVATURE_SAMPLES,
       radiusFloor: rungUsed.radiusFloor,
       minSpacing: rungUsed.minSpacing,
+      shortcutsRequested: requestedShortcuts,
+      shortcutsPlaced: shortcuts.length,
+      shortcutMinGap: SHORTCUT_MIN_GAP,
+      shortcutShortfall: shortfallReason,
     }),
   });
 }

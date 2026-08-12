@@ -1,5 +1,6 @@
 const REQUEST_TIMEOUT_MS = 8000;
 const RECONNECT_WINDOW_MS = 20000;
+export const PLAYER_ID_KEY = 'neon-apex:player-id:v1';
 
 function defaultSocketUrl() {
   if (!location.host || location.protocol === 'file:') return 'wss://gaokao.aiimage.icu/multiplayer';
@@ -7,18 +8,58 @@ function defaultSocketUrl() {
   return `${protocol}//${location.host}/multiplayer`;
 }
 
+function randomPlayerId() {
+  try {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  } catch {
+    // Fall through to the manual generator below.
+  }
+  let id = '';
+  for (let index = 0; index < 32; index += 1) id += Math.floor(Math.random() * 16).toString(16);
+  return id;
+}
+
+// Anonymous, device-local identity used by the server to look up a stored rank.
+// There are no accounts, so this id is all the continuity a guest gets.
+export function resolvePlayerId(storage) {
+  let target = storage;
+  if (target === undefined) {
+    try {
+      target = globalThis.localStorage;
+    } catch {
+      target = null;
+    }
+  }
+  if (!target?.getItem) return randomPlayerId();
+  try {
+    const stored = target.getItem(PLAYER_ID_KEY);
+    if (typeof stored === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(stored)) return stored;
+    const created = randomPlayerId();
+    target.setItem(PLAYER_ID_KEY, created);
+    return created;
+  } catch {
+    return randomPlayerId();
+  }
+}
+
 export class MultiplayerClient extends EventTarget {
-  constructor({ url = defaultSocketUrl() } = {}) {
+  constructor({ url = defaultSocketUrl(), storage, rankState = null } = {}) {
     super();
     this.url = url;
     this.socket = null;
     this.room = null;
     this.selfId = null;
+    this.playerId = resolvePlayerId(storage);
     this.reconnectToken = null;
     this.intentionalClose = false;
     this.pending = null;
     this.reconnectStartedAt = 0;
     this.reconnectTimer = null;
+    this.matching = false;
+    this.matchStatus = null;
+    this.rank = null;
+    this.lastRankResult = null;
+    this.localRankState = rankState;
   }
 
   get connected() {
@@ -29,12 +70,56 @@ export class MultiplayerClient extends EventTarget {
     return Boolean(this.room && this.room.hostId === this.selfId);
   }
 
+  get isRanked() {
+    return Boolean(this.room?.ranked);
+  }
+
+  // Rank rows for the current room, ready for lobby rendering.
+  get roster() {
+    return (this.room?.players ?? []).map((player) => ({
+      ...player,
+      self: player.id === this.selfId,
+    }));
+  }
+
   async createRoom({ name, map }) {
-    return this._request('create', { name, map });
+    return this._request('create', { name, map, ...this._identity() });
   }
 
   async joinRoom({ name, code }) {
-    return this._request('join', { name, code: String(code || '').trim().toUpperCase() });
+    return this._request('join', { name, code: String(code || '').trim().toUpperCase(), ...this._identity() });
+  }
+
+  // Ranked matchmaking: the server picks the room, the map and the start time.
+  async quickMatch({ name } = {}) {
+    this.matching = true;
+    try {
+      const room = await this._request('quickMatch', { name, ...this._identity() });
+      return room;
+    } catch (error) {
+      this.matching = false;
+      throw error;
+    }
+  }
+
+  cancelQuickMatch() {
+    if (!this.connected) {
+      this.matching = false;
+      this.matchStatus = null;
+      this.dispatchEvent(new CustomEvent('match-cancelled', { detail: { reason: 'offline' } }));
+      return false;
+    }
+    return this.send('cancelQuickMatch');
+  }
+
+  // rankPoints is a courtesy hint for logging only; the server settles from
+  // its own stored rank and ignores whatever we claim here.
+  _identity() {
+    const points = Number(this.localRankState?.points);
+    return {
+      playerId: this.playerId,
+      ...(Number.isFinite(points) ? { rankPoints: points } : {}),
+    };
   }
 
   startRace() {
@@ -65,6 +150,8 @@ export class MultiplayerClient extends EventTarget {
     this.room = null;
     this.selfId = null;
     this.reconnectToken = null;
+    this.matching = false;
+    this.matchStatus = null;
     this.dispatchEvent(new CustomEvent('left'));
   }
 
@@ -115,6 +202,9 @@ export class MultiplayerClient extends EventTarget {
       this.selfId = message.selfId;
       this.reconnectToken = message.reconnectToken;
       this.room = message.room;
+      this.matching = false;
+      if (message.rank) this.rank = message.rank;
+      this._syncSelfRank();
       if (this.pending) {
         clearTimeout(this.pending.timeout);
         this.pending.resolve(message.room);
@@ -123,13 +213,34 @@ export class MultiplayerClient extends EventTarget {
       this.dispatchEvent(new CustomEvent(message.type, { detail: message }));
       return;
     }
-    if (message.type === 'room') this.room = message.room;
+    if (message.type === 'room') {
+      this.room = message.room;
+      this._syncSelfRank();
+    }
+    if (message.type === 'match-status') this.matchStatus = message;
+    if (message.type === 'match-cancelled') {
+      this.matching = false;
+      this.matchStatus = null;
+      this.room = null;
+      this.selfId = null;
+      this.reconnectToken = null;
+    }
+    if (message.type === 'rankResult') {
+      this.lastRankResult = message;
+      if (message.rank) this.rank = message.rank;
+    }
     if (message.type === 'error' && this.pending) {
       clearTimeout(this.pending.timeout);
+      this.matching = false;
       this.pending.reject(new Error(message.message || '联机请求失败'));
       this.pending = null;
     }
     this.dispatchEvent(new CustomEvent(message.type, { detail: message }));
+  }
+
+  _syncSelfRank() {
+    const self = this.room?.players?.find((player) => player.id === this.selfId);
+    if (self?.rank) this.rank = self.rank;
   }
 
   _handleClose(socket) {

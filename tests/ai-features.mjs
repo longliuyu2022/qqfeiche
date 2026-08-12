@@ -20,22 +20,23 @@ function makeRivalObject() {
   return object;
 }
 
-function makeRivals(count, { lanes } = {}) {
+function makeRivals(count, { lanes, overrides } = {}) {
   return Array.from({ length: count }, (unused, index) => ({
     object: makeRivalObject(),
     progress: -0.0038 * (index + 1),
     totalProgress: -0.0038 * (index + 1),
     speed: 62 + index * 1.9,
     lane: lanes?.[index] ?? ((index % 2) * 2 - 1) * (1.7 + Math.floor(index / 2) * 0.35),
+    ...(overrides?.[index] ?? {}),
   }));
 }
 
 /** Race with the player parked far ahead so rival-vs-player logic stays inert. */
-function makeRace({ rivalCount = 1, lanes, ...options } = {}) {
+function makeRace({ rivalCount = 1, lanes, overrides, ...options } = {}) {
   const player = new ArcadeVehicle({ trackCurve: curve, trackWidth: 16, totalLaps: 20 });
   const race = new RaceSystem({
     player,
-    rivals: makeRivals(rivalCount, { lanes }),
+    rivals: makeRivals(rivalCount, { lanes, overrides }),
     trackCurve: curve,
     startProgress: 0,
     trackWidth: 16,
@@ -46,6 +47,55 @@ function makeRace({ rivalCount = 1, lanes, ...options } = {}) {
   race.start();
   return race;
 }
+
+const UP = new THREE.Vector3(0, 1, 0);
+
+/** One side of a candidate branch, mirroring `traceShortcut()` in track-features.js. */
+function traceBranch(start, end, sign, samples, edgeOffset, peak) {
+  const points = [];
+  for (let index = 0; index < samples; index += 1) {
+    const u = index / (samples - 1);
+    const point = curve.getPointAt(start + (end - start) * u);
+    const tangent = curve.getTangentAt(start + (end - start) * u).setY(0).normalize();
+    const side = new THREE.Vector3().crossVectors(UP, tangent).normalize();
+    points.push(point.addScaledVector(side, sign * (edgeOffset + (peak - edgeOffset) * Math.sin(Math.PI * u))));
+  }
+  let length = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    length += Math.hypot(points[index].x - points[index - 1].x, points[index].z - points[index - 1].z);
+  }
+  return { points, length };
+}
+
+/**
+ * Synthetic `featureZonesForPhysics().shortcuts` entry: a sine-bulged branch off
+ * the shoulder, on whichever side actually shortens the lap.
+ */
+function makeShortcut({ id, start, end, samples = 15, edgeOffset = 6, peak = 40, halfWidth = 5.44 }) {
+  const spanMeters = (end - start) * trackLength;
+  const outward = traceBranch(start, end, 1, samples, edgeOffset, peak);
+  const inward = traceBranch(start, end, -1, samples, edgeOffset, peak);
+  const side = outward.length <= inward.length ? 1 : -1;
+  const traced = side === 1 ? outward : inward;
+  return {
+    id,
+    start,
+    end,
+    side,
+    halfWidth,
+    savedMeters: spanMeters - traced.length,
+    points: traced.points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+    spanMeters,
+    pathLength: traced.length,
+  };
+}
+
+/** How far off the main centre line a rival's car body actually sits, in meters. */
+function lateralFromCentre(race, rival) {
+  const centre = curve.getPointAt(rival.progress);
+  return Math.hypot(rival.object.position.x - centre.x, rival.object.position.z - centre.z);
+}
+
 
 function stepRace(race, frames, onFrame) {
   for (let frame = 0; frame < frames; frame += 1) {
@@ -360,6 +410,258 @@ assert.equal(handicapped.totalLaps, 2);
 assert.equal(handicapped.state.entrantCount, 4);
 assert.equal(handicapped.hasTrackFeatures, true, 'configure without trackFeatures keeps the current zones');
 
+// ---------------------------------------------------------------------------
+// 7. Shortcuts, personality: some rivals fork off, some stay on the main line.
+// ---------------------------------------------------------------------------
+const SC = makeShortcut({ id: 'sc-1', start: 0.2, end: 0.5 });
+assert.ok(SC.savedMeters > 15, `the test branch should be a real shortcut (${SC.savedMeters.toFixed(1)} m)`);
+
+const moodRace = makeRace({ rivalCount: 5, speedCompensation: 1, trackFeatures: { shortcuts: [SC] } });
+assert.equal(moodRace.hasTrackFeatures, true, 'a shortcut-only layout still counts as track features');
+assert.equal(moodRace.getTrackFeatures().shortcuts.length, 1);
+assert.ok(
+  moodRace.rivals.every((rival) => rival.shortcutBias > 0 && rival.shortcutBias < 1),
+  'the default shortcut taste should leave room for both answers',
+);
+const moodEnters = new Set();
+moodRace.on('rivalShortcutEnter', ({ rival, shortcutId }) => moodEnters.add(`${rival.id}:${shortcutId}`));
+const maxLateral = moodRace.rivals.map(() => 0);
+stepRace(moodRace, 1400, () => {
+  for (const [index, rival] of moodRace.rivals.entries()) {
+    maxLateral[index] = Math.max(maxLateral[index], lateralFromCentre(moodRace, rival));
+  }
+  return true;
+});
+
+const branchRunners = maxLateral.filter((lateral) => lateral > 12).length;
+const lineRunners = maxLateral.filter((lateral) => lateral < 9).length;
+assert.ok(branchRunners >= 1, `at least one rival should drive the branch (${maxLateral.map((v) => v.toFixed(1))})`);
+assert.ok(lineRunners >= 1, `at least one rival should stay on the main line (${maxLateral.map((v) => v.toFixed(1))})`);
+assert.equal(branchRunners + lineRunners, 5, 'every rival should be clearly on one side of the choice');
+assert.equal(moodEnters.size, branchRunners, 'the enter events should match the cars seen off the racing line');
+assert.ok(
+  moodRace.rivals.every((rival) => rival.activeShortcut === null || rival.shortcutId === rival.activeShortcut.id),
+  'shortcutId must track the active branch',
+);
+
+// ---------------------------------------------------------------------------
+// 8. Shortcuts, payoff: shorter road, same speed, so the section goes quicker.
+// ---------------------------------------------------------------------------
+/** Drives one lone rival through the branch span and reports what it cost. */
+function runSection(bias, shortcut = SC) {
+  const race = makeRace({
+    rivalCount: 1,
+    speedCompensation: 1,
+    overrides: [{ shortcutBias: bias, lane: 0 }],
+    trackFeatures: { shortcuts: [shortcut] },
+  });
+  const rival = race.rivals[0];
+  let entryTime = null;
+  let exitTime = null;
+  let meters = 0;
+  let topSpeed = 0;
+  let forked = false;
+  stepRace(race, 1200, () => {
+    if (entryTime === null && rival.raceProgress >= shortcut.start) entryTime = race.state.raceTime;
+    if (entryTime !== null && exitTime === null) meters += rival.speed * FRAME;
+    if (exitTime === null && rival.raceProgress >= shortcut.end) exitTime = race.state.raceTime;
+    if (rival.activeShortcut) forked = true;
+    topSpeed = Math.max(topSpeed, rival.speed);
+    return exitTime === null;
+  });
+  return { seconds: exitTime - entryTime, meters, topSpeed, forked, rival };
+}
+
+const cutter = runSection(1);
+const cruiser = runSection(0);
+assert.equal(cutter.forked, true, 'a rival with full shortcut taste should take the branch');
+assert.equal(cruiser.forked, false, 'a rival with zero shortcut taste should ignore the branch');
+assert.ok(
+  cutter.seconds < cruiser.seconds - 0.2,
+  `the branch should be quicker (${cutter.seconds.toFixed(2)}s vs ${cruiser.seconds.toFixed(2)}s)`,
+);
+assert.ok(
+  Math.abs((cruiser.meters - cutter.meters) - SC.savedMeters) < 4,
+  `distance saved (${(cruiser.meters - cutter.meters).toFixed(1)} m) should match savedMeters (${SC.savedMeters.toFixed(1)} m)`,
+);
+assert.ok(
+  cutter.topSpeed <= cruiser.topSpeed + 1e-9,
+  'the branch must pay in distance only, never in a speed bonus',
+);
+assert.ok(cutter.rival.activeShortcut === null, 'the branch releases the rival at its exit');
+assert.ok(
+  Math.abs(cutter.rival.raceProgress - SC.end) < 0.01,
+  'the rival should rejoin the main line right at the branch exit progress',
+);
+
+// ---------------------------------------------------------------------------
+// 9. Shortcuts, determinism: same grid, same choices, every single run.
+// ---------------------------------------------------------------------------
+function shortcutLog(seed = {}) {
+  const race = makeRace({ rivalCount: 5, speedCompensation: 1, trackFeatures: { shortcuts: [SC] }, ...seed });
+  const log = [];
+  race.on('rivalShortcutEnter', ({ rival, shortcutId }) => {
+    log.push(`in ${rival.id} ${shortcutId} @${race.state.raceTime.toFixed(3)}`);
+  });
+  race.on('rivalShortcutExit', ({ rival, shortcutId }) => {
+    log.push(`out ${rival.id} ${shortcutId} @${race.state.raceTime.toFixed(3)}`);
+  });
+  stepRace(race, 1400);
+  return { log, progress: race.rivals.map((rival) => rival.raceProgress) };
+}
+const runA = shortcutLog();
+const runB = shortcutLog();
+assert.ok(runA.log.length >= 4, `the deterministic run should log several branch passes (${runA.log.length})`);
+assert.deepEqual(runB.log, runA.log, 'shortcut choices must be reproducible run to run');
+assert.deepEqual(runB.progress, runA.progress, 'a reproducible run must land on identical progress');
+
+// ---------------------------------------------------------------------------
+// 10. Two disjoint branches on one lap: both usable, never mixed up.
+// ---------------------------------------------------------------------------
+const SC_A = makeShortcut({ id: 'sc-a', start: 0.08, end: 0.34, peak: 38 });
+const SC_B = makeShortcut({ id: 'sc-b', start: 0.52, end: 0.8, peak: 40 });
+const pairRace = makeRace({
+  rivalCount: 2,
+  speedCompensation: 1,
+  overrides: [{ shortcutBias: 1, lane: 0 }, { shortcutBias: 0, lane: 0 }],
+  trackFeatures: { shortcuts: [SC_B, SC_A] },
+});
+assert.deepEqual(
+  pairRace.getTrackFeatures().shortcuts.map((shortcut) => shortcut.id),
+  ['sc-a', 'sc-b'],
+  'branches are stored in lap order regardless of input order',
+);
+const pairRival = pairRace.rivals[0];
+const soloRival = pairRace.rivals[1];
+const pairLog = [];
+pairRace.on('rivalShortcutEnter', ({ rival, shortcutId }) => pairLog.push({ kind: 'in', id: rival.id, shortcutId }));
+pairRace.on('rivalShortcutExit', ({ rival, shortcutId }) => pairLog.push({ kind: 'out', id: rival.id, shortcutId }));
+stepRace(pairRace, 1500, () => {
+  const active = pairRival.activeShortcut;
+  if (active) {
+    const zone = active.id === 'sc-a' ? SC_A : SC_B;
+    assert.ok(
+      pairRival.progress >= zone.start - 1e-6 && pairRival.progress <= zone.end + 1e-6,
+      `${active.id} must only own lap progress inside its own span (${pairRival.progress.toFixed(3)})`,
+    );
+    assert.equal(pairRival.shortcutId, active.id);
+  }
+  assert.equal(soloRival.activeShortcut, null, 'the zero-taste rival must never fork off');
+  return true;
+});
+
+const enteredIds = pairLog.filter((entry) => entry.kind === 'in').map((entry) => entry.shortcutId);
+assert.ok(enteredIds.includes('sc-a') && enteredIds.includes('sc-b'), 'both branches should get used');
+assert.ok(pairLog.every((entry) => entry.id === 'rival-1'), 'only the committed rival should fork');
+for (let index = 0; index + 1 < pairLog.length; index += 2) {
+  assert.equal(pairLog[index].kind, 'in');
+  assert.equal(pairLog[index + 1].kind, 'out', 'every entry must be closed before the next one opens');
+  assert.equal(pairLog[index + 1].shortcutId, pairLog[index].shortcutId, 'a branch must exit where it was entered');
+}
+assert.ok(
+  pairRival.raceProgress > soloRival.raceProgress,
+  `the branch runner should be up the road (${pairRival.raceProgress.toFixed(3)} vs ${soloRival.raceProgress.toFixed(3)})`,
+);
+
+// ---------------------------------------------------------------------------
+// 11. A pad bypassed by a branch must not fire for the car on the branch.
+// ---------------------------------------------------------------------------
+const bypassRace = makeRace({
+  rivalCount: 2,
+  speedCompensation: 1,
+  overrides: [{ shortcutBias: 1, lane: 0 }, { shortcutBias: 0, lane: 0 }],
+  trackFeatures: {
+    pads: [
+      { id: 'pad-bypassed', start: 0.35, end: 0.35 + metersToProgress(14), halfWidth: 4.4 },
+      { id: 'pad-open', start: 0.6, end: 0.6 + metersToProgress(14), halfWidth: 4.4 },
+    ],
+    shortcuts: [SC],
+  },
+});
+const bypassHits = new Map();
+bypassRace.on('rivalPadBoost', ({ rival, padId }) => {
+  const key = `${rival.id}:${padId}`;
+  bypassHits.set(key, (bypassHits.get(key) ?? 0) + 1);
+});
+stepRace(bypassRace, 1500, () => {
+  for (const rival of bypassRace.rivals) {
+    if (rival.activeShortcut) {
+      assert.equal(rival.featureTarget, null, 'a car on a branch must not chase main-line pads');
+      assert.equal(rival.padBoostTime, 0, 'a car on a branch must not be riding a pad boost');
+    }
+  }
+  return true;
+});
+assert.equal(
+  bypassHits.get('rival-1:pad-bypassed') ?? 0,
+  0,
+  'the branch runner drives past the pad the branch bypasses, so it must never fire',
+);
+assert.ok((bypassHits.get('rival-2:pad-bypassed') ?? 0) >= 2, 'the main-line rival still collects that pad');
+assert.ok((bypassHits.get('rival-1:pad-open') ?? 0) >= 2, 'pads outside the branch still work after a fork');
+
+// ---------------------------------------------------------------------------
+// 12. Full soak with pads, ramps and two branches: finite, monotonic, finishing.
+// ---------------------------------------------------------------------------
+const mixedFeatures = {
+  pads: [0.36, 0.44].map((start, index) => ({
+    id: `pad-${index + 1}`,
+    start,
+    end: start + metersToProgress(14),
+    halfWidth: 4.4,
+  })),
+  ramps: [{ id: 'ramp-1', start: 0.82, end: 0.82 + metersToProgress(16), height: 2.4, halfWidth: 4.96 }],
+  shortcuts: [SC_A, SC_B],
+};
+const mixedRace = makeRace({ rivalCount: 5, totalLaps: 4, trackFeatures: mixedFeatures });
+const mixedEnters = new Map();
+const mixedExits = new Map();
+mixedRace.on('rivalShortcutEnter', ({ rival }) => mixedEnters.set(rival.id, (mixedEnters.get(rival.id) ?? 0) + 1));
+mixedRace.on('rivalShortcutExit', ({ rival }) => mixedExits.set(rival.id, (mixedExits.get(rival.id) ?? 0) + 1));
+
+const mixedLast = mixedRace.rivals.map((rival) => rival.raceProgress);
+stepRace(mixedRace, 3000, () => {
+  for (const [index, rival] of mixedRace.rivals.entries()) {
+    assert.ok(Number.isFinite(rival.raceProgress), `rival ${index} progress must stay finite`);
+    assert.ok(Number.isFinite(rival.speed), `rival ${index} speed must stay finite`);
+    assert.ok(Number.isFinite(rival.lane), `rival ${index} lane must stay finite`);
+    assert.ok(Number.isFinite(rival.shortcutLocal), `rival ${index} branch progress must stay finite`);
+    assert.ok(rival.raceProgress >= mixedLast[index], `rival ${index} progress must not go backwards`);
+    assert.ok(
+      rival.speed > rival.baseSpeed * 0.5 && rival.speed < rival.baseSpeed * 1.6,
+      `rival ${index} speed must stay in a plausible band`,
+    );
+    assert.ok(Number.isFinite(rival.object.position.x + rival.object.position.y + rival.object.position.z));
+    assert.ok(rival.object.position.y >= 0.039, `rival ${index} must never drop through the road`);
+    const lateral = lateralFromCentre(mixedRace, rival);
+    assert.ok(
+      rival.activeShortcut ? lateral <= 44 : lateral <= 7,
+      `rival ${index} must be on the road or inside a branch corridor (${lateral.toFixed(2)} m)`,
+    );
+    mixedLast[index] = rival.raceProgress;
+  }
+  return true;
+});
+
+assert.ok(mixedRace.rivals.every((rival) => rival.finished), 'every rival should finish a four lap race');
+assert.ok(
+  mixedRace.rivals.every((rival) => Number.isFinite(rival.finishTime) && rival.finishTime > 0),
+  'every finisher needs a finite finish time',
+);
+assert.ok(mixedRace.rivals.every((rival) => rival.activeShortcut === null), 'nobody may be stuck inside a branch');
+assert.ok(mixedEnters.size >= 1, 'the mixed layout should still see branch traffic');
+for (const [id, enters] of mixedEnters) {
+  assert.ok((mixedExits.get(id) ?? 0) >= enters - 1, `${id} must leave every branch it enters`);
+}
+assert.equal(mixedRace.state.standings.length, 6);
+assert.ok(mixedRace.state.standings.every((entry) => Number.isFinite(entry.progress)));
+
+// Clearing features also clears the branches.
+mixedRace.configure({ trackFeatures: null });
+assert.equal(mixedRace.hasTrackFeatures, false);
+assert.equal(mixedRace.getTrackFeatures().shortcuts.length, 0);
+assert.ok(mixedRace.rivals.every((rival) => rival.activeShortcut === null && rival.shortcutId === null));
+
 console.log(JSON.stringify({
   baselineParity: true,
   padBoosts: padEvents.length,
@@ -375,4 +677,15 @@ console.log(JSON.stringify({
   soakLaunches: [...launchCount.values()],
   soakMaxAirTime: Number(Math.max(...maxAirStreak).toFixed(2)),
   speedCompensation: handicapped.speedCompensation,
+  shortcutSavedMeters: Number(SC.savedMeters.toFixed(1)),
+  shortcutBias: moodRace.rivals.map((rival) => Number(rival.shortcutBias.toFixed(3))),
+  shortcutTakers: branchRunners,
+  shortcutSkippers: lineRunners,
+  shortcutMaxLateral: maxLateral.map((lateral) => Number(lateral.toFixed(1))),
+  sectionSecondsOnBranch: Number(cutter.seconds.toFixed(3)),
+  sectionSecondsOnLine: Number(cruiser.seconds.toFixed(3)),
+  sectionMetersSaved: Number((cruiser.meters - cutter.meters).toFixed(2)),
+  shortcutDeterministic: true,
+  twoBranchPasses: enteredIds.length,
+  mixedShortcutEnters: [...mixedEnters.values()],
 }));

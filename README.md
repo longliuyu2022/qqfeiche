@@ -4,11 +4,23 @@
 
 > 项目根目录：`/root/neon-apex`
 >
-> 当前版本：`v1.6.0`（Android `versionCode 13`）
+> 当前版本：`v1.7.0`（Android `versionCode 14`）
 >
 > 在线游戏：<https://gaokao.aiimage.icu/>
 >
 > Android 下载：[APK](https://gaokao.aiimage.icu/downloads/neon-apex-release.apk) · [AAB](https://gaokao.aiimage.icu/downloads/neon-apex-release.aab)
+
+## v1.7.0 更新
+
+- 近道扩展到每图 2 条，互不重叠且各自至少省 12m（night 15.4+20.2m、day 12.6+38.4m、alpine 12.3+44.3m、canyon 12.5+21.4m、coast 17.1+26.2m）
+- AI 对手会走近道：按性格决定是否切入（同一场里选择稳定可复现），实测单条支路省 0.40 秒/圈，收益只来自路程更短、不加速度
+- 新增成就系统：20 条成就（里程碑/技巧/竞速/近道机关/收藏/段位六类），解锁发放 100–1500 金币，首页新增成就面板与进度条
+- 商店扩展到 6 大类共 26 件商品：新增 4 款轮毂、4 款尾翼、4 种喇叭（双音/警笛/芯片音/气笛，按 `H` 键鸣笛）
+- 轮毂与尾翼实时挂到车上，尾翼按车辆实际尺寸自适应缩放与就位（glTF 主车比程序化车宽 1.8 倍，固定尺寸会埋进车身）
+- 排位赛联机化：新增「快速排位」按段位匹配 2–6 人，服务端持久化段位分并在赛后按名次结算（服务端不信任客户端上报的分数），大厅显示各车手段位
+- 新增 GitHub Actions CI（测试 + 构建 + 产物校验）与 `scripts/preflight.sh` 部署前门禁（含版本号一致性检查）
+- 新增 `tests/achievements.mjs`、`tests/ranked-online.mjs`，`npm test` 扩展到 16 套
+- Android 版本更新为 `1.7.0 (14)`
 
 ## v1.6.0 更新
 
@@ -113,7 +125,9 @@
 - 五图程序化加速带、飞跃台与弯道近道，腾空物理与落地喷判定
 - AI 对手会走加速带、飞跃台并按机关调整走线
 - 四台可选车型与五维属性差异，首页车库选车
-- 改装商店：金币结算、车辆/车漆/贴花购买与装备
+- 改装商店：金币结算，车辆/车漆/贴花/轮毂/尾翼/喇叭六类共 26 件商品
+- 成就系统：20 条成就与金币奖励
+- 快速排位联机：按段位匹配，服务端结算段位分
 - 影子挑战幽灵回放、本地排位段位、程序化 BGM 与中文播报语音
 - 2–6 人房间码联机好友赛，包含同步发车、实时车辆状态、排名和断线恢复
 - 6 车同场竞速，包含 AI 超车、封堵和动态车道策略
@@ -258,6 +272,9 @@ neon-apex/
 │   ├── shop.js                # 商店商品目录、金币结算与购买装备逻辑
 │   ├── shop-ui.js             # 首页与游戏内共用的商店界面
 │   ├── decals.js              # 车漆与贴花烘焙成车身纹理
+│   ├── car-parts.js           # 轮毂/尾翼挂件与喇叭音效合成
+│   ├── achievements.js        # 成就定义、解锁判定与奖励
+│   ├── achievements-ui.js     # 成就面板
 │   ├── track-features.js      # 加速带/飞跃台/近道布点计算与物理 zone
 │   ├── track-feature-meshes.js# 加速带箭头、跳台与近道支路网格渲染
 │   ├── drift-effects.js       # 胎痕、轮胎烟雾与集气火花
@@ -283,7 +300,8 @@ neon-apex/
 ├── public/assets/             # 车辆、地图封面、HDRI、PBR 材质与播报语音资源
 ├── tests/                     # 逻辑、触控和 Playwright 视觉测试
 ├── server/                    # 2–6 人房间和 WebSocket 状态服务
-│   └── race-validation.mjs    # 联机进度、位置和完赛校验
+│   ├── race-validation.mjs    # 联机进度、位置和完赛校验
+│   └── ranked-store.mjs       # 服务端段位分持久化
 ├── scripts/                   # APK 构建与线上部署脚本
 ├── android/                   # 原生 Android 工程、正式签名配置和启动器图标引用
 ├── dist/                      # Vite 生产构建（可再生成）
@@ -295,6 +313,39 @@ neon-apex/
 ## 美术资源与许可
 
 主车辆使用 Khronos glTF Sample Assets 的 **Car Concept**，遵循 CC BY 4.0。环境材质来自 Poly Haven。具体来源、许可和文件校验信息见 [`public/assets/ASSET-LICENSES.md`](public/assets/ASSET-LICENSES.md)。主车辆加载失败时，游戏会自动切换到程序化备用车辆。
+
+## 持续集成
+
+GitHub Actions 工作流 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在推送到 `main` 和所有 Pull Request 上触发，使用 Node.js 20 依次执行：
+
+1. `npm ci` 按 `package-lock.json` 安装依赖（带 npm 缓存）
+2. `npm test` 跑完 15 套纯 Node 逻辑测试（赛制、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
+3. `npm run build` 生产构建
+4. 校验构建产物：`dist/index.html` 以及 `dist/assets` 下的 `.js` 与 `.css` 均存在且非空
+
+CI **不运行**浏览器测试（`test:visual`、`test:maps-browser`、`test:item-browser`、`test:online-browser`、`test:performance`、`test:sections`）。它们需要本机 Chromium（`/usr/local/bin/chromium-browser`，可用 `CHROMIUM_PATH` 覆盖）外加一个 `vite preview` 服务器，在 CI 的软件渲染环境下单次运行可能长达数十分钟，既会撞上 job 超时，也容易因渲染差异产生假失败。这些测试保留为本地和发布前的人工回归手段。Job 超时设为 20 分钟，同分支的新提交会自动取消仍在运行的旧任务。
+
+### 部署前预检
+
+本地发布前先跑门禁脚本，它把历史上容易漏掉的步骤固定下来：
+
+```bash
+bash scripts/preflight.sh                  # 全量：静态检查 + npm test + 生产构建
+bash scripts/preflight.sh --skip-tests     # 只做静态检查（跳过测试与构建）
+bash scripts/preflight.sh --allow-dirty    # 允许工作区存在未提交改动
+```
+
+七项检查依次为：
+
+1. Node.js 版本 ≥ 20
+2. Git 工作区无未提交改动（`--allow-dirty` 可跳过）
+3. `npm test` 全绿（`--skip-tests` 可跳过）
+4. `npm run build` 成功且 `dist` 产物存在非空（`--skip-tests` 可跳过）
+5. `package.json` 的 `version` 与 `android/app/build.gradle` 的 `versionName` 一致
+6. README 顶部记录的「当前版本」与 `package.json` 的 `version` 一致（找不到记录只告警，不阻断）
+7. 汇总并打印 `PREFLIGHT OK vX.Y.Z`
+
+第 5 项是硬性要求：网页版和 Android 版必须共用同一个版本号，发版时要同时更新 `package.json` 的 `version`、`android/app/build.gradle` 的 `versionName`（并递增 `versionCode`）和 README 顶部的当前版本说明，任一处遗漏都会让预检失败或告警。预检通过后再执行下面的部署命令。
 
 ## 部署
 

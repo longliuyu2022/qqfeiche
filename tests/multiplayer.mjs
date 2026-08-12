@@ -85,6 +85,20 @@ try {
   const guestJoined = await guestJoinedPromise;
   assert.equal(guestJoined.room.players.length, 2);
 
+  // Friend rooms stay unranked but still surface每位车手的段位, so the host can
+  // size up the grid before发车.
+  assert.equal(guestJoined.room.mode, 'friendly');
+  assert.equal(guestJoined.room.ranked, false);
+  for (const player of guestJoined.room.players) {
+    assert.equal(typeof player.rank.tier, 'number');
+    assert.equal(typeof player.rank.division, 'number');
+    assert.equal(typeof player.rank.points, 'number');
+    assert.equal(typeof player.rank.label, 'string');
+    assert.equal(player.rank.tierId, 'bronze');
+    assert.equal(player.rank.label, '青铜 III · 0分');
+    assert.equal(player.hasRank, false);
+  }
+
   await expectConnectionRejected(429);
 
   const missingRoomPromise = waitForMessage(probe, 'error');
@@ -142,6 +156,7 @@ try {
     rateLimit: rateLimit.code,
     connectionLimit: 429,
     invalidState: 'rejected',
+    rankFields: 'ok',
   }));
 } finally {
   server.kill('SIGTERM');

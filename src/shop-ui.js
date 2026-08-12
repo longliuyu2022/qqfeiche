@@ -14,12 +14,18 @@ const CATEGORY_LABELS = Object.freeze({
   car: '车辆',
   paint: '车漆',
   decal: '贴花',
+  wheel: '轮毂',
+  spoiler: '尾翼',
+  horn: '喇叭',
 });
 
 const CATEGORY_EMPTY = Object.freeze({
   car: '暂无可购买的车辆',
   paint: '暂无可购买的车漆',
   decal: '暂无可购买的贴花',
+  wheel: '暂无可购买的轮毂',
+  spoiler: '暂无可购买的尾翼',
+  horn: '暂无可购买的喇叭',
 });
 
 function formatCoins(value) {

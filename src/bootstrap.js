@@ -8,18 +8,19 @@ import { CAR_CATALOG, getCarById } from './car-catalog.js';
 import { formatRank, getRankTier, loadRankState } from './ranked.js';
 import { isOwned, loadWallet } from './shop.js';
 import { createShopUi } from './shop-ui.js';
+import { createAchievementsUi } from './achievements-ui.js';
 
 const ui = Object.fromEntries([
   'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeKicker', 'homeRank', 'homeCoins',
   'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'homeTrackSubtitle', 'trackSelector', 'garageSelector',
-  'startRace', 'openMultiplayer', 'openShop',
+  'startRace', 'openMultiplayer', 'openShop', 'openAchievements',
   'openSettings', 'settingsMenu', 'closeSettings', 'soundEnabled',
   'masterVolume', 'volumeValue', 'qualitySetting', 'vibrationEnabled',
   'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'ghostEnabled',
   'cameraShakeEnabled', 'loading', 'multiplayerMenu', 'closeMultiplayer',
   'onlineConnect', 'onlineLobby', 'onlineName', 'roomCode', 'createRoom', 'joinRoom',
   'copyRoomCode', 'onlineRoomCode', 'onlineMapName', 'onlinePlayers', 'onlineStatus',
-  'startOnlineRace', 'leaveRoom',
+  'startOnlineRace', 'leaveRoom', 'quickMatch',
 ].map((id) => [id, document.getElementById(id)]));
 
 let preferences = loadPreferences();
@@ -166,6 +167,7 @@ function renderHome() {
   document.body.dataset.track = selectedTrack;
 }
 
+const achievementsUi = createAchievementsUi({});
 const shopUi = createShopUi({
   getWallet: () => wallet,
   setWallet: (next) => { wallet = next; },
@@ -226,6 +228,7 @@ function setOnlineBusy(value) {
   onlineBusy = value;
   ui.createRoom.disabled = value;
   ui.joinRoom.disabled = value;
+  if (ui.quickMatch) ui.quickMatch.disabled = value;
 }
 
 function ensureMultiplayer() {
@@ -271,6 +274,12 @@ function renderLobby(room = multiplayer?.room) {
     state.textContent = player.id === room.hostId ? '房主' : player.connected ? '已加入' : '重连中';
     row.classList.toggle('offline', !player.connected);
     row.append(marker, name, state);
+    if (player.rank?.label) {
+      const rank = document.createElement('b');
+      rank.className = 'player-rank';
+      rank.textContent = player.rank.label;
+      row.append(rank);
+    }
     return row;
   });
   ui.onlinePlayers.replaceChildren(...rows);
@@ -310,11 +319,15 @@ async function connectOnline(kind) {
     return;
   }
   setOnlineBusy(true);
-  setOnlineStatus(kind === 'create' ? '正在创建房间…' : '正在加入房间…');
+  setOnlineStatus(
+    kind === 'create' ? '正在创建房间…' : kind === 'quick' ? '正在按段位匹配车手…' : '正在加入房间…',
+  );
   try {
     const room = kind === 'create'
       ? await client.createRoom({ name, map: selectedTrack })
-      : await client.joinRoom({ name, code: ui.roomCode.value });
+      : kind === 'quick'
+        ? await client.quickMatch({ name })
+        : await client.joinRoom({ name, code: ui.roomCode.value });
     renderLobby(room);
   } catch (error) {
     setOnlineStatus(error.message || '连接失败，请重试', 'error');
@@ -368,6 +381,7 @@ ui.startRace.addEventListener('click', () => launchGame());
 ui.openMultiplayer.addEventListener('click', () => setMultiplayerVisible(true));
 ui.closeMultiplayer.addEventListener('click', () => setMultiplayerVisible(false));
 ui.createRoom.addEventListener('click', () => connectOnline('create'));
+ui.quickMatch?.addEventListener('click', () => connectOnline('quick'));
 ui.joinRoom.addEventListener('click', () => connectOnline('join'));
 ui.roomCode.addEventListener('input', () => { ui.roomCode.value = ui.roomCode.value.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 6); });
 ui.copyRoomCode.addEventListener('click', async () => {
@@ -383,6 +397,7 @@ ui.leaveRoom.addEventListener('click', () => multiplayer?.leave());
 ui.openSettings.addEventListener('click', () => setSettingsVisible(true));
 ui.closeSettings.addEventListener('click', () => setSettingsVisible(false));
 ui.openShop?.addEventListener('click', () => shopUi.open());
+ui.openAchievements?.addEventListener('click', () => achievementsUi.open());
 ui.soundEnabled.addEventListener('change', () => applyPreferences({ soundEnabled: ui.soundEnabled.checked }));
 ui.masterVolume.addEventListener('input', () => applyPreferences({ masterVolume: Number(ui.masterVolume.value) }));
 ui.musicEnabled.addEventListener('change', () => applyPreferences({ musicEnabled: ui.musicEnabled.checked }));
@@ -396,6 +411,10 @@ window.addEventListener('keydown', (event) => {
   if (!bootstrapActive) return;
   if (shopUi.visible) {
     if (event.code === 'Escape') shopUi.close();
+    return;
+  }
+  if (achievementsUi.visible) {
+    if (event.code === 'Escape') achievementsUi.close();
     return;
   }
   if (!ui.settingsMenu.hidden) {
@@ -417,6 +436,10 @@ window.__NEON_APEX_ANDROID_BACK__ = () => {
   if (!bootstrapActive) return false;
   if (shopUi.visible) {
     shopUi.close();
+    return true;
+  }
+  if (achievementsUi.visible) {
+    achievementsUi.close();
     return true;
   }
   if (!ui.settingsMenu.hidden) {

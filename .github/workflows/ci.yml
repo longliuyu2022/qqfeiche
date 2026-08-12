@@ -1,0 +1,76 @@
+name: CI
+
+# 触发条件：main 分支的推送，以及所有针对本仓库的 Pull Request。
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+# 同一分支上的新提交会取消仍在排队/运行的旧任务，避免浪费 Actions 时长。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: 逻辑测试与生产构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 逻辑测试（15 套纯 Node 测试）
+        run: npm test
+
+      # 说明：这里刻意不运行浏览器测试
+      # （test:visual / test:maps-browser / test:item-browser /
+      #   test:online-browser / test:performance / test:sections）。
+      # 它们需要本机 Chromium（/usr/local/bin/chromium-browser，可用 CHROMIUM_PATH 覆盖）
+      # 外加一个 vite preview 服务器，并且在 GitHub Actions 的软件渲染（SwiftShader）
+      # 环境下单次运行可能长达数十分钟，会稳定撞上 job 超时且极易因渲染差异产生假失败。
+      # 这些测试保留为本地/发布前的人工回归手段，详见 README「持续集成」一节。
+
+      - name: 生产构建
+        run: npm run build
+
+      - name: 校验构建产物存在且非空
+        run: |
+          set -Eeuo pipefail
+
+          if [[ ! -s dist/index.html ]]; then
+            echo "构建校验失败：dist/index.html 缺失或为空" >&2
+            exit 1
+          fi
+
+          JS_FILE="$(find dist/assets -maxdepth 1 -type f -name '*.js' -size +100c -print -quit)"
+          if [[ -z "${JS_FILE}" ]]; then
+            echo "构建校验失败：dist/assets 下没有非空的 .js 产物" >&2
+            exit 1
+          fi
+
+          CSS_FILE="$(find dist/assets -maxdepth 1 -type f -name '*.css' -size +100c -print -quit)"
+          if [[ -z "${CSS_FILE}" ]]; then
+            echo "构建校验失败：dist/assets 下没有非空的 .css 产物" >&2
+            exit 1
+          fi
+
+          echo "构建产物校验通过："
+          echo "  dist/index.html"
+          echo "  ${JS_FILE}"
+          echo "  ${CSS_FILE}"

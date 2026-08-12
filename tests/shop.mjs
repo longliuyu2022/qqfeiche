@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  EQUIP_SLOTS,
   SHOP_ITEMS,
   WALLET_KEY,
   createDefaultWallet,
@@ -39,10 +40,19 @@ class ThrowingStorage {
   }
 }
 
-const CATEGORIES = new Set(['car', 'paint', 'decal']);
+const CATEGORIES = new Set(['car', 'paint', 'decal', 'wheel', 'spoiler', 'horn']);
 const PATTERNS = new Set(['stripe', 'flame', 'circuit', 'checker']);
+const WHEEL_STYLES = new Set(['spoke', 'mesh', 'blade', 'turbine']);
+const SPOILER_STYLES = new Set(['ducktail', 'gt-wing', 'swan', 'diffuser']);
+const HORN_TONES = new Set(['classic', 'siren', 'chiptune', 'airhorn']);
 const HEX = /^#[0-9a-f]{6}$/i;
 const carIds = new Set(CAR_CATALOG.map((car) => car.id));
+// Every equip slot the wallet carries; `equippedWith` spells out an expectation
+// without repeating the five nulls at every assertion.
+const EMPTY_EQUIPPED = Object.freeze({ paint: null, decal: null, wheel: null, spoiler: null, horn: null });
+const equippedWith = (overrides = {}) => ({ ...EMPTY_EQUIPPED, ...overrides });
+assert.deepEqual(EQUIP_SLOTS, ['paint', 'decal', 'wheel', 'spoiler', 'horn']);
+assert.ok(Object.isFrozen(EQUIP_SLOTS));
 
 // 1. Catalog integrity: unique ids, sane prices, payloads the game can actually use.
 const ids = SHOP_ITEMS.map((item) => item.id);
@@ -63,7 +73,13 @@ for (const item of SHOP_ITEMS) {
 const cars = itemsByCategory('car');
 const paints = itemsByCategory('paint');
 const decals = itemsByCategory('decal');
-assert.equal(cars.length + paints.length + decals.length, SHOP_ITEMS.length);
+const wheels = itemsByCategory('wheel');
+const spoilers = itemsByCategory('spoiler');
+const horns = itemsByCategory('horn');
+assert.equal(
+  cars.length + paints.length + decals.length + wheels.length + spoilers.length + horns.length,
+  SHOP_ITEMS.length,
+);
 assert.deepEqual(cars.map((item) => [item.id, item.price]), [
   ['volt', 0],
   ['nimbus', 3200],
@@ -93,6 +109,42 @@ for (const decal of decals) {
 }
 assert.equal(new Set(decals.map((decal) => decal.payload.pattern)).size, 4);
 
+// 1b. Wheels / spoilers / horns: the three gear categories car-parts.js consumes.
+// wheel.style and spoiler.style must stay in lockstep with car-parts' builders,
+// and horn.tone with its Web Audio recipes.
+const GEAR = Object.freeze([
+  ['wheel', wheels, 'style', WHEEL_STYLES],
+  ['spoiler', spoilers, 'style', SPOILER_STYLES],
+  ['horn', horns, 'tone', HORN_TONES],
+]);
+for (const [category, items, field, allowed] of GEAR) {
+  assert.ok(items.length >= 3 && items.length <= 4, `${category} needs 3-4 entries`);
+  const values = new Set();
+  for (const item of items) {
+    assert.equal(item.category, category);
+    assert.ok(item.price >= 500 && item.price <= 3000, `${item.id} price band`);
+    assert.ok(Object.isFrozen(item.payload), `${item.id} payload must be frozen`);
+    assert.equal(typeof item.payload[field], 'string', `${item.id} ${field}`);
+    assert.ok(allowed.has(item.payload[field]), `${item.id} ${field} value`);
+    // Every gear card is coloured by the shop UI from payload.color / accentColor.
+    assert.ok(HEX.test(item.payload.color), `${item.id} color`);
+    assert.ok(HEX.test(item.payload.accentColor), `${item.id} accentColor`);
+    values.add(item.payload[field]);
+  }
+  assert.equal(values.size, items.length, `${category} ${field} values must be distinct`);
+}
+assert.deepEqual(wheels.map((item) => item.id), ['wheel-spoke', 'wheel-mesh', 'wheel-blade', 'wheel-turbine']);
+assert.deepEqual(spoilers.map((item) => item.id), ['spoiler-ducktail', 'spoiler-diffuser', 'spoiler-gt-wing', 'spoiler-swan']);
+assert.deepEqual(horns.map((item) => item.id), ['horn-classic', 'horn-siren', 'horn-chiptune', 'horn-airhorn']);
+// All four styles/tones of each family are covered, so no builder is unreachable.
+assert.deepEqual(new Set(wheels.map((item) => item.payload.style)), WHEEL_STYLES);
+assert.deepEqual(new Set(spoilers.map((item) => item.payload.style)), SPOILER_STYLES);
+assert.deepEqual(new Set(horns.map((item) => item.payload.tone)), HORN_TONES);
+// itemsByCategory hands back live catalog objects for the new families too.
+assert.equal(itemsByCategory('wheel')[0], getItemById('wheel-spoke'));
+assert.notEqual(itemsByCategory('horn'), horns);
+assert.deepEqual(itemsByCategory('spoiler').map((item) => item.id), spoilers.map((item) => item.id));
+
 assert.equal(getItemById('nope'), null);
 assert.equal(getItemById(undefined), null);
 assert.equal(getItemById({ id: 'volt' }), null);
@@ -107,7 +159,7 @@ assert.equal(itemsByCategory('car').length, 4);
 assert.deepEqual(createDefaultWallet(), {
   coins: 0,
   owned: ['volt'],
-  equipped: { paint: null, decal: null },
+  equipped: equippedWith(),
   totalEarned: 0,
   updatedAt: null,
 });
@@ -127,14 +179,14 @@ assert.deepEqual(normalizeWallet({
   // and the rest is sorted into catalog order.
   owned: ['volt', 'nimbus', 'decal-flame'],
   // paint-cyan is not owned → slot cleared; decal-flame is owned → kept.
-  equipped: { paint: null, decal: 'decal-flame' },
+  equipped: equippedWith({ decal: 'decal-flame' }),
   totalEarned: 80,
   updatedAt: null,
 });
 assert.deepEqual(normalizeWallet({ coins: 99_999_999, totalEarned: 1e12, updatedAt: 'now' }), {
   coins: 9_999_999,
   owned: ['volt'],
-  equipped: { paint: null, decal: null },
+  equipped: equippedWith(),
   totalEarned: 9_999_999,
   updatedAt: 'now',
 });
@@ -142,8 +194,45 @@ assert.deepEqual(normalizeWallet({ coins: 99_999_999, totalEarned: 1e12, updated
 assert.deepEqual(normalizeWallet({
   owned: ['paint-cyan', 'decal-flame'],
   equipped: { paint: 'decal-flame', decal: 'paint-cyan' },
-}).equipped, { paint: null, decal: null });
+}).equipped, equippedWith());
 assert.equal(normalizeWallet({ owned: ['volt', 'paint-void'], equipped: { paint: 'paint-void' } }).equipped.paint, 'paint-void');
+
+// Legacy saves (v1.5 and older) only carry paint/decal. They must load without
+// throwing, keep everything they already had, and simply gain empty gear slots.
+const legacySave = {
+  coins: 4321,
+  owned: ['volt', 'nimbus', 'paint-sakura', 'decal-circuit'],
+  equipped: { paint: 'paint-sakura', decal: 'decal-circuit' },
+  totalEarned: 15_000,
+  updatedAt: 99,
+};
+const migrated = normalizeWallet(legacySave);
+assert.deepEqual(migrated, {
+  coins: 4321,
+  owned: ['volt', 'nimbus', 'paint-sakura', 'decal-circuit'],
+  equipped: equippedWith({ paint: 'paint-sakura', decal: 'decal-circuit' }),
+  totalEarned: 15_000,
+  updatedAt: 99,
+});
+// The legacy object itself is never touched.
+assert.deepEqual(legacySave.equipped, { paint: 'paint-sakura', decal: 'decal-circuit' });
+assert.deepEqual(Object.keys(migrated.equipped), ['paint', 'decal', 'wheel', 'spoiler', 'horn']);
+// Normalization is idempotent, so a migrated save survives another round trip.
+assert.deepEqual(normalizeWallet(migrated), migrated);
+// Gear slots pointing at unowned items are scrubbed the same way paint/decal are.
+assert.deepEqual(normalizeWallet({
+  owned: ['volt', 'wheel-blade'],
+  equipped: { wheel: 'wheel-blade', spoiler: 'spoiler-swan', horn: 'horn-airhorn' },
+}).equipped, equippedWith({ wheel: 'wheel-blade' }));
+// ...as are unknown ids and cross-category values.
+assert.deepEqual(normalizeWallet({
+  owned: ['volt', 'wheel-mesh', 'spoiler-gt-wing', 'horn-siren'],
+  equipped: { wheel: 'ghost-wheel', spoiler: 'horn-siren', horn: 'spoiler-gt-wing' },
+}).equipped, equippedWith());
+assert.deepEqual(normalizeWallet({
+  owned: ['volt', 'wheel-mesh', 'spoiler-gt-wing', 'horn-siren'],
+  equipped: { wheel: 'wheel-mesh', spoiler: 'spoiler-gt-wing', horn: 'horn-siren' },
+}).equipped, equippedWith({ wheel: 'wheel-mesh', spoiler: 'spoiler-gt-wing', horn: 'horn-siren' }));
 
 assert.equal(isOwned(createDefaultWallet(), 'volt'), true);
 assert.equal(isOwned(createDefaultWallet(), 'nimbus'), false);
@@ -180,7 +269,7 @@ assert.equal(podium.earned, 535);
 assert.deepEqual(podium.wallet, {
   coins: 535,
   owned: ['volt'],
-  equipped: { paint: null, decal: null },
+  equipped: equippedWith(),
   totalEarned: 535,
   updatedAt: 1000,
 });
@@ -284,10 +373,10 @@ assert.equal(afterEarn.wallet.coins, 5320);
 assert.equal(afterEarn.wallet.totalEarned, 5320);
 assert.equal(afterEarn.wallet.updatedAt, 900);
 // decal-flame was never bought, so the corrupt equip slot is scrubbed on the way through.
-assert.deepEqual(afterEarn.wallet.equipped, { paint: null, decal: null });
+assert.deepEqual(afterEarn.wallet.equipped, equippedWith());
 
 // 4. purchase: unknown / owned / insufficient / success.
-const buyer = { coins: 5000, owned: ['volt'], equipped: { paint: null, decal: null }, totalEarned: 5000, updatedAt: 1 };
+const buyer = { coins: 5000, owned: ['volt'], equipped: equippedWith(), totalEarned: 5000, updatedAt: 1 };
 const unknownBuy = purchase(buyer, 'nope', 10);
 assert.deepEqual(unknownBuy, { wallet: normalizeWallet(buyer), ok: false, reason: 'unknown', item: null });
 assert.equal(unknownBuy.wallet.updatedAt, 1);
@@ -309,7 +398,7 @@ assert.equal(boughtPaint.item.id, 'paint-cyan');
 assert.deepEqual(boughtPaint.wallet, {
   coins: 4200,
   owned: ['volt', 'paint-cyan'],
-  equipped: { paint: null, decal: null },
+  equipped: equippedWith(),
   totalEarned: 5000,
   updatedAt: 1200,
 });
@@ -356,22 +445,22 @@ assert.deepEqual(equip(dressed, 'volt').wallet, dressed);
 const cyan = equip(dressed, 'paint-cyan');
 assert.equal(cyan.ok, true);
 assert.equal(cyan.reason, null);
-assert.deepEqual(cyan.wallet.equipped, { paint: 'paint-cyan', decal: null });
+assert.deepEqual(cyan.wallet.equipped, equippedWith({ paint: 'paint-cyan' }));
 assert.equal(cyan.wallet.updatedAt, 42);
 assert.equal(cyan.wallet.coins, 100);
 // Same-slot exclusivity: the new paint replaces the old one.
 const lava = equip(cyan.wallet, 'paint-lava');
-assert.deepEqual(lava.wallet.equipped, { paint: 'paint-lava', decal: null });
+assert.deepEqual(lava.wallet.equipped, equippedWith({ paint: 'paint-lava' }));
 // Toggle: equipping what is already on takes it off.
 const stripped = equip(lava.wallet, 'paint-lava');
 assert.equal(stripped.ok, true);
-assert.deepEqual(stripped.wallet.equipped, { paint: null, decal: null });
+assert.deepEqual(stripped.wallet.equipped, equippedWith());
 // Slots are independent.
 const decaled = equip(lava.wallet, 'decal-flame');
-assert.deepEqual(decaled.wallet.equipped, { paint: 'paint-lava', decal: 'decal-flame' });
-assert.deepEqual(equip(decaled.wallet, 'decal-flame').wallet.equipped, { paint: 'paint-lava', decal: null });
-assert.deepEqual(equip(decaled.wallet, 'paint-cyan').wallet.equipped, { paint: 'paint-cyan', decal: 'decal-flame' });
-assert.deepEqual(lava.wallet.equipped, { paint: 'paint-lava', decal: null });
+assert.deepEqual(decaled.wallet.equipped, equippedWith({ paint: 'paint-lava', decal: 'decal-flame' }));
+assert.deepEqual(equip(decaled.wallet, 'decal-flame').wallet.equipped, equippedWith({ paint: 'paint-lava' }));
+assert.deepEqual(equip(decaled.wallet, 'paint-cyan').wallet.equipped, equippedWith({ paint: 'paint-cyan', decal: 'decal-flame' }));
+assert.deepEqual(lava.wallet.equipped, equippedWith({ paint: 'paint-lava' }));
 
 const frozenDressed = Object.freeze({
   coins: 0,
@@ -385,6 +474,73 @@ const frozenEquip = equip(frozenDressed, 'decal-circuit');
 assert.equal(JSON.stringify(frozenDressed), frozenDressedSnapshot);
 assert.notEqual(frozenEquip.wallet.equipped, frozenDressed.equipped);
 assert.equal(frozenEquip.wallet.equipped.decal, 'decal-circuit');
+
+// 5b. The gear categories go through the exact same buy → equip → toggle path.
+let geared = { coins: 12_000, owned: ['volt'], totalEarned: 12_000, updatedAt: 5 };
+for (const id of ['wheel-spoke', 'wheel-turbine', 'spoiler-gt-wing', 'spoiler-swan', 'horn-siren', 'horn-airhorn']) {
+  const bought = purchase(geared, id, 6);
+  assert.equal(bought.ok, true, `buying ${id}`);
+  geared = bought.wallet;
+}
+assert.equal(geared.coins, 12_000 - 700 - 2400 - 1600 - 2200 - 1200 - 2600);
+assert.equal(geared.totalEarned, 12_000);
+// Gear that was never bought cannot be equipped, and unknown ids are still 'unknown'.
+assert.equal(equip(geared, 'wheel-blade').reason, 'not-owned');
+assert.equal(equip(geared, 'spoiler-ducktail').reason, 'not-owned');
+assert.equal(equip(geared, 'horn-chiptune').reason, 'not-owned');
+assert.equal(equip(geared, 'wheel-nope').reason, 'unknown');
+
+// One slot per family, and the three families never interfere with each other.
+const withWheel = equip(geared, 'wheel-spoke');
+assert.equal(withWheel.ok, true);
+assert.deepEqual(withWheel.wallet.equipped, equippedWith({ wheel: 'wheel-spoke' }));
+const withSpoiler = equip(withWheel.wallet, 'spoiler-gt-wing');
+const withHorn = equip(withSpoiler.wallet, 'horn-siren');
+assert.deepEqual(withHorn.wallet.equipped, equippedWith({
+  wheel: 'wheel-spoke',
+  spoiler: 'spoiler-gt-wing',
+  horn: 'horn-siren',
+}));
+// Same-slot exclusivity: the second wheel replaces the first, nothing else moves.
+const swappedWheel = equip(withHorn.wallet, 'wheel-turbine');
+assert.deepEqual(swappedWheel.wallet.equipped, equippedWith({
+  wheel: 'wheel-turbine',
+  spoiler: 'spoiler-gt-wing',
+  horn: 'horn-siren',
+}));
+const swappedSpoiler = equip(swappedWheel.wallet, 'spoiler-swan');
+assert.equal(swappedSpoiler.wallet.equipped.spoiler, 'spoiler-swan');
+assert.equal(swappedSpoiler.wallet.equipped.wheel, 'wheel-turbine');
+const swappedHorn = equip(swappedSpoiler.wallet, 'horn-airhorn');
+assert.deepEqual(swappedHorn.wallet.equipped, equippedWith({
+  wheel: 'wheel-turbine',
+  spoiler: 'spoiler-swan',
+  horn: 'horn-airhorn',
+}));
+// Toggle each gear slot back off; the other two stay put.
+assert.deepEqual(equip(swappedHorn.wallet, 'wheel-turbine').wallet.equipped, equippedWith({
+  spoiler: 'spoiler-swan',
+  horn: 'horn-airhorn',
+}));
+assert.deepEqual(equip(swappedHorn.wallet, 'spoiler-swan').wallet.equipped, equippedWith({
+  wheel: 'wheel-turbine',
+  horn: 'horn-airhorn',
+}));
+assert.deepEqual(equip(swappedHorn.wallet, 'horn-airhorn').wallet.equipped, equippedWith({
+  wheel: 'wheel-turbine',
+  spoiler: 'spoiler-swan',
+}));
+// Earlier wallets in the chain are untouched by any of the above.
+assert.deepEqual(withWheel.wallet.equipped, equippedWith({ wheel: 'wheel-spoke' }));
+// Paint/decal and gear coexist in one wallet.
+const fullKit = equip(equip(swappedHorn.wallet, 'paint-cyan').wallet, 'decal-flame').wallet;
+assert.deepEqual(fullKit.equipped, equippedWith({
+  wheel: 'wheel-turbine',
+  spoiler: 'spoiler-swan',
+  horn: 'horn-airhorn',
+}));
+// paint-cyan / decal-flame were never bought, so those two equips were refused.
+assert.equal(equip(swappedHorn.wallet, 'paint-cyan').reason, 'not-owned');
 
 // 6. Storage round trip with injected storage plus corrupt-data fallback.
 const storage = new MemoryStorage();
@@ -411,10 +567,28 @@ storage.setItem(WALLET_KEY, JSON.stringify({ coins: 250, owned: ['ghost-car', 'd
 assert.deepEqual(loadWallet(storage), {
   coins: 250,
   owned: ['volt', 'decal-checker'],
-  equipped: { paint: null, decal: null },
+  equipped: equippedWith(),
   totalEarned: 0,
   updatedAt: null,
 });
+// A v1.5 save on disk (no gear slots at all) loads clean and gains empty slots.
+storage.setItem(WALLET_KEY, JSON.stringify({
+  coins: 700,
+  owned: ['volt', 'paint-lava', 'decal-stripe'],
+  equipped: { paint: 'paint-lava', decal: 'decal-stripe' },
+  totalEarned: 3000,
+  updatedAt: 12,
+}));
+assert.deepEqual(loadWallet(storage), {
+  coins: 700,
+  owned: ['volt', 'paint-lava', 'decal-stripe'],
+  equipped: equippedWith({ paint: 'paint-lava', decal: 'decal-stripe' }),
+  totalEarned: 3000,
+  updatedAt: 12,
+});
+// Gear survives a full save/load round trip.
+assert.equal(saveWallet(fullKit, storage), true);
+assert.deepEqual(loadWallet(storage), fullKit);
 
 // Default storage in node: no globalThis.localStorage → default wallet, save is a no-op.
 assert.deepEqual(loadWallet(), createDefaultWallet());
@@ -447,7 +621,7 @@ session = equip(session, 'decal-stripe').wallet;
 assert.deepEqual(session, {
   coins: 4280 - 3200 - 600,
   owned: ['volt', 'nimbus', 'decal-stripe'],
-  equipped: { paint: null, decal: 'decal-stripe' },
+  equipped: equippedWith({ decal: 'decal-stripe' }),
   totalEarned: 4280,
   // equip leaves the timestamp to the last real transaction.
   updatedAt: 3200,
@@ -457,13 +631,16 @@ assert.deepEqual(loadWallet(storage), session);
 
 console.log(JSON.stringify({
   catalog: 'ok',
+  gearCatalog: `${wheels.length}/${spoilers.length}/${horns.length}`,
   normalization: 'ok',
+  legacyMigration: 'ok',
   earnBreakdown: 'ok',
   placementMapping: 'ok',
   modeMultipliers: 'ok',
   coinCap: 'ok',
   purchaseBranches: 'ok',
   equipToggle: 'ok',
+  gearEquipToggle: 'ok',
   storageRoundTrip: 'ok',
   immutability: 'ok',
   podiumPayout: podium.earned,

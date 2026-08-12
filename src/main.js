@@ -32,7 +32,14 @@ import { createHeroCarVariant } from './procedural-vehicle.js';
 import { createGhostPlayer, createGhostRecorder, serializeGhost, deserializeGhost } from './ghost.js';
 import { earnCoins, getItemById, isOwned, loadWallet, saveWallet } from './shop.js';
 import { createShopUi } from './shop-ui.js';
+import { createAchievementsUi } from './achievements-ui.js';
+import {
+  evaluateAchievements,
+  loadAchievementState,
+  saveAchievementState,
+} from './achievements.js';
 import { createLiveryTexture } from './decals.js';
+import { createHornPlayer, createSpoiler, createWheelSet } from './car-parts.js';
 import {
   applyRaceResult as applyRankResult,
   formatRank,
@@ -270,6 +277,27 @@ let ghostCar = null;
 let ghostData = null;
 let rankState = loadRankState();
 let wallet = loadWallet();
+let achievementState = loadAchievementState();
+// Per-race tallies feeding the achievement checks at the finish line.
+const raceTally = {
+  maxBoostChain: 0,
+  perfectStart: false,
+  landingBoosts: 0,
+  // Pads are deduped by id: crossing the same strip on every lap is one pad.
+  padIds: new Set(),
+  shortcutRuns: 0,
+  driftScore: 0,
+};
+
+function resetRaceTally() {
+  raceTally.maxBoostChain = 0;
+  raceTally.perfectStart = false;
+  raceTally.landingBoosts = 0;
+  raceTally.padIds.clear();
+  raceTally.shortcutRuns = 0;
+  raceTally.driftScore = 0;
+}
+
 let raceRecords = loadRaceRecords();
 const clock = new THREE.Clock();
 const cameraTarget = new THREE.Vector3();
@@ -1035,8 +1063,81 @@ const shopUi = createShopUi({
   onChange: (next) => {
     renderWallet();
     applyEquippedPaint(hero, next);
+    applyEquippedGear(next);
   },
 });
+
+const achievementsUi = createAchievementsUi({ getState: () => achievementState });
+
+let mountedWheels = null;
+let mountedSpoiler = null;
+let hornPlayer = null;
+
+/**
+ * Local-space bounds of the hero body, measured with the car's race transform
+ * temporarily cleared. Shop parts are authored against the procedural cars, so
+ * the larger glTF body needs them scaled and re-seated onto its real deck.
+ */
+function measureHeroBounds() {
+  const position = hero.position.clone();
+  const rotation = hero.rotation.clone();
+  hero.position.set(0, 0, 0);
+  hero.rotation.set(0, 0, 0);
+  hero.updateWorldMatrix(true, true);
+  const bounds = new THREE.Box3().setFromObject(hero);
+  hero.position.copy(position);
+  hero.rotation.copy(rotation);
+  hero.updateWorldMatrix(true, true);
+  return bounds;
+}
+
+const DESIGN_CAR_WIDTH = 2.4;
+
+function fitSpoilerToCar(group) {
+  if (!group) return;
+  // Box3.setFromObject walks hidden objects too, so detach rather than hide:
+  // measuring with the wing still mounted would feed its own size back in.
+  hero.remove(group);
+  const bounds = measureHeroBounds();
+  hero.add(group);
+  const size = bounds.getSize(new THREE.Vector3());
+  if (!Number.isFinite(size.x) || size.x <= 0) return;
+  const scale = THREE.MathUtils.clamp(size.x / DESIGN_CAR_WIDTH, 0.75, 2.2);
+  group.scale.setScalar(scale);
+  // Sit on the rear deck, just proud of the roof line so the wing reads.
+  group.position.set(0, bounds.max.y * 0.92, bounds.min.z + 0.35 * scale);
+}
+
+/** Mounts the equipped wheel caps and spoiler, swapping out anything stale. */
+function applyEquippedGear(currentWallet = wallet) {
+  const wheelItem = currentWallet.equipped?.wheel ? getItemById(currentWallet.equipped.wheel) : null;
+  const spoilerItem = currentWallet.equipped?.spoiler ? getItemById(currentWallet.equipped.spoiler) : null;
+
+  if (mountedWheels?.style !== wheelItem?.payload?.style) {
+    mountedWheels?.dispose();
+    mountedWheels = null;
+    if (wheelItem) {
+      mountedWheels = createWheelSet(wheelItem.payload.style, wheelItem.payload);
+      mountedWheels.attach(hero);
+    }
+  }
+  if (mountedSpoiler?.style !== spoilerItem?.payload?.style) {
+    mountedSpoiler?.dispose();
+    mountedSpoiler = null;
+    if (spoilerItem) {
+      mountedSpoiler = createSpoiler(spoilerItem.payload.style, spoilerItem.payload);
+      mountedSpoiler.attach(hero);
+      fitSpoilerToCar(hero.children.find((child) => child.name === 'ShopSpoiler'));
+    }
+  }
+}
+
+function soundHorn() {
+  const tone = wallet.equipped?.horn ? getItemById(wallet.equipped.horn)?.payload?.tone : null;
+  if (!tone) return false;
+  if (!hornPlayer && audio.context) hornPlayer = createHornPlayer(audio.context, audio.master);
+  return Boolean(hornPlayer?.play(tone));
+}
 
 function selectMode(modeId, { persist = true } = {}) {
   if (!RACE_MODES[modeId]) return;
@@ -1075,6 +1176,7 @@ function prepareRace(modeId = activeMode) {
     const stored = loadGhost(activeTrackId);
     ghostData = stored ? deserializeGhost(stored) : null;
   }
+  resetRaceTally();
   lastPlayerPosition = null;
   overtakeCooldown = 0;
   launchThrottleAt = null;
@@ -1396,6 +1498,7 @@ document.querySelector('#resultHome').addEventListener('click', showHome);
 document.querySelector('#openSettings').addEventListener('click', () => setSettingsVisible(true));
 document.querySelector('#closeSettings').addEventListener('click', () => setSettingsVisible(false));
 document.querySelector('#openShop')?.addEventListener('click', () => shopUi.open());
+document.querySelector('#openAchievements')?.addEventListener('click', () => achievementsUi.open());
 for (const button of document.querySelectorAll('[data-race-mode]')) {
   button.addEventListener('click', () => selectMode(button.dataset.raceMode));
 }
@@ -1414,6 +1517,10 @@ window.addEventListener('keydown', (event) => {
     if (event.code === 'Escape') shopUi.close();
     return;
   }
+  if (achievementsUi.visible) {
+    if (event.code === 'Escape') achievementsUi.close();
+    return;
+  }
   if (!ui.settingsMenu.hidden) {
     if (event.code === 'Escape') setSettingsVisible(false);
     return;
@@ -1424,6 +1531,10 @@ window.addEventListener('keydown', (event) => {
     return;
   }
   if (homeVisible) return;
+  if (event.code === 'KeyH' && !paused) {
+    event.preventDefault();
+    if (soundHorn()) haptic(12);
+  }
   if (event.code === 'KeyE' && activeMode === 'items' && raceStarted && !paused) {
     event.preventDefault();
     itemRace.useItem();
@@ -1473,11 +1584,15 @@ vehicle.on('lap', (state) => {
 });
 vehicle.on('miniBoost', ({ source, chain }) => {
   fovRush = Math.max(fovRush, source === 'launch' ? 1 : 0.55);
+  if (source === 'drift') raceTally.maxBoostChain = Math.max(raceTally.maxBoostChain, chain || 0);
   if (source === 'drift' && chain > 1) {
     showCallout(`连喷 x${chain}`, 0.95);
     if (chain === 2) announce('chain_boost');
     haptic(14);
   }
+});
+vehicle.on('launchBoost', ({ quality }) => {
+  if (quality === 'perfect') raceTally.perfectStart = true;
 });
 vehicle.on('doubleBoost', () => {
   fovRush = 1;
@@ -1485,25 +1600,29 @@ vehicle.on('doubleBoost', () => {
   announce('double_boost');
   haptic([12, 26, 12]);
 });
-vehicle.on('landingBoost', () => {
+vehicle.on('landingBoost', ({ bonus }) => {
+  if (bonus > 0) raceTally.landingBoosts += 1;
   fovRush = Math.max(fovRush, 0.7);
   showCallout('落地喷！', 1);
   announce('landing_boost');
   haptic(20);
 });
-vehicle.on('padBoost', () => {
+vehicle.on('padBoost', ({ padId }) => {
+  raceTally.padIds.add(padId);
   fovRush = Math.max(fovRush, 0.8);
   audio.tone(680, 0.22, 0.15, 'square');
   haptic(12);
 });
 vehicle.on('rampLaunch', () => haptic(10));
 vehicle.on('shortcutEnter', ({ savedMeters }) => {
+  raceTally.shortcutRuns += 1;
   fovRush = Math.max(fovRush, 0.5);
   showCallout(savedMeters >= 1 ? `近道！省 ${Math.round(savedMeters)}m` : '近道！', 1.2);
   audio.tone(520, 0.26, 0.13, 'triangle');
   haptic([10, 20, 10]);
 });
 vehicle.on('driftEnd', ({ points, combo, nitro }) => {
+  raceTally.driftScore += points || 0;
   haptic(18);
   showCallout(`DRIFT +${points}  N2O +${nitro}  x${combo}`, 1.15);
 });
@@ -1579,8 +1698,38 @@ raceSystem.on('finish', (result) => {
   if (payout) {
     wallet = payout.wallet;
     saveWallet(wallet);
-    renderWallet();
   }
+  const achievementOutcome = isOnline ? null : evaluateAchievements(achievementState, {
+    mode: activeMode,
+    position: modeResult.position,
+    entrants: modeResult.entrants,
+    finished: true,
+    cleanRace: modeResult.cleanRace,
+    trackId: activeTrackId,
+    skillScore: modeResult.skillScore,
+    driftScore: raceTally.driftScore,
+    maxBoostChain: raceTally.maxBoostChain,
+    perfectStart: raceTally.perfectStart,
+    landingBoosts: raceTally.landingBoosts,
+    padBoosts: raceTally.padIds.size,
+    shortcutRuns: raceTally.shortcutRuns,
+    totalCoins: wallet.totalEarned,
+    ownedCarCount: wallet.owned.filter((id) => getItemById(id)?.category === 'car').length,
+    equippedPaint: wallet.equipped?.paint ?? null,
+    rankTier: rankState.bestTierReached,
+  }, Date.now());
+  if (achievementOutcome) {
+    achievementState = achievementOutcome.state;
+    saveAchievementState(achievementState);
+    if (achievementOutcome.coinReward > 0) {
+      wallet = { ...wallet, coins: wallet.coins + achievementOutcome.coinReward };
+      saveWallet(wallet);
+    }
+    for (const [index, unlocked] of (achievementOutcome.newlyUnlocked ?? []).entries()) {
+      setTimeout(() => showCallout(`成就达成：${unlocked.name ?? unlocked.id}`, 1.6), 2600 + index * 1500);
+    }
+  }
+  renderWallet();
   showCallout(
     mode.rivals > 0
       ? `FINISH  P${modeResult.position}/${modeResult.entrants}`
@@ -1632,6 +1781,7 @@ setRivalsVisible(0);
 renderRankBadge();
 renderWallet();
 applyEquippedPaint();
+applyEquippedGear();
 ui.hudTrackName.textContent = activeTrack.shortTitle;
 ui.raceFeedTitle.textContent = activeTrack.title;
 ui.raceFeedMeta.textContent = activeTrack.meta;
@@ -1657,6 +1807,10 @@ for (const button of document.querySelectorAll('[data-car]')) {
 window.__NEON_APEX_ANDROID_BACK__ = () => {
   if (shopUi.visible) {
     shopUi.close();
+    return true;
+  }
+  if (achievementsUi.visible) {
+    achievementsUi.close();
     return true;
   }
   if (!ui.settingsMenu.hidden) {

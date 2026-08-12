@@ -5,9 +5,14 @@ export const WALLET_KEY = 'neon-apex:wallet:v1';
 
 // 商品目录：数组顺序即商店展示顺序，也是钱包 owned 的排序依据。
 // payload 是装备后交给游戏使用的数据：
-//   car   → car-catalog 的车辆 id 字符串
-//   paint → { color, accentColor }，覆盖当前车辆配色
-//   decal → { pattern, color }，pattern ∈ stripe | flame | circuit | checker
+//   car     → car-catalog 的车辆 id 字符串
+//   paint   → { color, accentColor }，覆盖当前车辆配色
+//   decal   → { pattern, color }，pattern ∈ stripe | flame | circuit | checker
+//   wheel   → { style, color, accentColor }，style ∈ spoke | mesh | blade | turbine
+//   spoiler → { style, color, accentColor }，style ∈ ducktail | gt-wing | swan | diffuser
+//   horn    → { tone, color, accentColor }，tone ∈ classic | siren | chiptune | airhorn
+//             （horn 的 color/accentColor 只用于商店卡片配色，不上车）
+// wheel / spoiler 的 payload 直接喂给 car-parts.js 的 createWheelSet / createSpoiler。
 export const SHOP_ITEMS = Object.freeze([
   Object.freeze({
     id: 'volt',
@@ -121,12 +126,109 @@ export const SHOP_ITEMS = Object.freeze([
     price: 2000,
     payload: Object.freeze({ pattern: 'checker', color: '#ffffff' }),
   }),
+  Object.freeze({
+    id: 'wheel-spoke',
+    category: 'wheel',
+    name: '五辐星轮',
+    desc: '经典五辐锻造轮，轻量又耐看，配任何车身都不出错。',
+    price: 700,
+    payload: Object.freeze({ style: 'spoke', color: '#c8d6df', accentColor: '#9fe9ff' }),
+  }),
+  Object.freeze({
+    id: 'wheel-mesh',
+    category: 'wheel',
+    name: '蜂巢网轮',
+    desc: '密辐网状轮圈，静止时是艺术品，转起来是一团金光。',
+    price: 1100,
+    payload: Object.freeze({ style: 'mesh', color: '#9aa6b2', accentColor: '#ffd166' }),
+  }),
+  Object.freeze({
+    id: 'wheel-blade',
+    category: 'wheel',
+    name: '刀锋轮毂',
+    desc: '三片刀锋辐条切开气流，弯道里像三道冷光在转。',
+    price: 1700,
+    payload: Object.freeze({ style: 'blade', color: '#7fd7e6', accentColor: '#eafcff' }),
+  }),
+  Object.freeze({
+    id: 'wheel-turbine',
+    category: 'wheel',
+    name: '涡轮轮毂',
+    desc: '八叶涡扇造型，深盘中心把刹车热量直接抽出来。',
+    price: 2400,
+    payload: Object.freeze({ style: 'turbine', color: '#ff8a3c', accentColor: '#ffe08a' }),
+  }),
+  Object.freeze({
+    id: 'spoiler-ducktail',
+    category: 'spoiler',
+    name: '鸭尾扰流',
+    desc: '小翘鸭尾，压得住尾巴又不破坏车身线条。',
+    price: 500,
+    payload: Object.freeze({ style: 'ducktail', color: '#1d2630', accentColor: '#2ce8f5' }),
+  }),
+  Object.freeze({
+    id: 'spoiler-diffuser',
+    category: 'spoiler',
+    name: '碳纤扩散器',
+    desc: '带竖鳍的后扩散器，高速直线也能把车压在地上。',
+    price: 900,
+    payload: Object.freeze({ style: 'diffuser', color: '#171d23', accentColor: '#ffc23c' }),
+  }),
+  Object.freeze({
+    id: 'spoiler-gt-wing',
+    category: 'spoiler',
+    name: 'GT 大尾翼',
+    desc: '双立柱大尾翼配端板，赛道日最直白的宣战。',
+    price: 1600,
+    payload: Object.freeze({ style: 'gt-wing', color: '#141a20', accentColor: '#ff2d78' }),
+  }),
+  Object.freeze({
+    id: 'spoiler-swan',
+    category: 'spoiler',
+    name: '天鹅颈尾翼',
+    desc: '天鹅颈上挂式支架，翼下气流不被打断，压力更干净。',
+    price: 2200,
+    payload: Object.freeze({ style: 'swan', color: '#101820', accentColor: '#7ad9ff' }),
+  }),
+  Object.freeze({
+    id: 'horn-classic',
+    category: 'horn',
+    name: '双音喇叭',
+    desc: '街车原厂的双音喇叭，一声就能让前车让线。',
+    price: 500,
+    payload: Object.freeze({ tone: 'classic', color: '#ffc23c', accentColor: '#fff3c4' }),
+  }),
+  Object.freeze({
+    id: 'horn-siren',
+    category: 'horn',
+    name: '巡警警笛',
+    desc: '扫频警笛，夜港街头按一下整条车流自动分开。',
+    price: 1200,
+    payload: Object.freeze({ tone: 'siren', color: '#ff2d78', accentColor: '#ffd0e2' }),
+  }),
+  Object.freeze({
+    id: 'horn-chiptune',
+    category: 'horn',
+    name: '芯片音喇叭',
+    desc: '八位机方波小旋律，超车时顺手来一段。',
+    price: 1800,
+    payload: Object.freeze({ tone: 'chiptune', color: '#7a2cff', accentColor: '#c9a3ff' }),
+  }),
+  Object.freeze({
+    id: 'horn-airhorn',
+    category: 'horn',
+    name: '重型气笛',
+    desc: '货车级气笛，低频压场，隔着两条街都听得见。',
+    price: 2600,
+    payload: Object.freeze({ tone: 'airhorn', color: '#2ce8f5', accentColor: '#eafcff' }),
+  }),
 ]);
 
 const ITEM_INDEX = new Map(SHOP_ITEMS.map((item, index) => [item.id, index]));
 // 价格为 0 的商品默认拥有，永远无法被"卖掉"或从存档里丢失。
 const DEFAULT_OWNED_IDS = Object.freeze(SHOP_ITEMS.filter((item) => item.price === 0).map((item) => item.id));
-const EQUIP_SLOTS = Object.freeze(['paint', 'decal']);
+// 可装备槽位：equip / normalizeWallet 都由这份清单驱动，加类别只要往这里加一项。
+export const EQUIP_SLOTS = Object.freeze(['paint', 'decal', 'wheel', 'spoiler', 'horn']);
 
 const COIN_CAP = 9_999_999;
 // 结算构成：完赛底薪 + 名次 + 技巧分 + 净胜 + 破纪录，最后乘模式系数。
@@ -181,6 +283,15 @@ function normalizeEquippedSlot(value, category, owned) {
   return item.id;
 }
 
+// 旧存档只有 paint/decal 两个槽，这里始终按最新槽位表补齐，缺的一律为 null。
+function normalizeEquipped(value, owned) {
+  const equipped = {};
+  for (const slot of EQUIP_SLOTS) {
+    equipped[slot] = normalizeEquippedSlot(value?.[slot], slot, owned);
+  }
+  return equipped;
+}
+
 // 缺失名次按最后一名处理，避免脏数据白拿冠军奖励。
 function sanitizePosition(value, entrants) {
   const number = Number(value);
@@ -203,7 +314,7 @@ export function createDefaultWallet() {
   return {
     coins: 0,
     owned: [...DEFAULT_OWNED_IDS],
-    equipped: { paint: null, decal: null },
+    equipped: normalizeEquipped(null, DEFAULT_OWNED_IDS),
     totalEarned: 0,
     updatedAt: null,
   };
@@ -214,10 +325,7 @@ export function normalizeWallet(value = {}) {
   return {
     coins: clampInt(value?.coins, 0, COIN_CAP, 0),
     owned,
-    equipped: {
-      paint: normalizeEquippedSlot(value?.equipped?.paint, 'paint', owned),
-      decal: normalizeEquippedSlot(value?.equipped?.decal, 'decal', owned),
-    },
+    equipped: normalizeEquipped(value?.equipped, owned),
     totalEarned: clampInt(value?.totalEarned, 0, COIN_CAP, 0),
     updatedAt: normalizeUpdatedAt(value?.updatedAt),
   };
@@ -298,7 +406,7 @@ export function purchase(wallet, itemId, now) {
   };
 }
 
-// 车漆/贴花的装备是同类互斥的开关：装备已装备项 = 卸下。
+// 车漆/贴花/轮毂/尾翼/喇叭的装备是同类互斥的开关：装备已装备项 = 卸下。
 // 车辆不走 equip，选车依然由 preferences.carId 负责。
 export function equip(wallet, itemId) {
   const base = normalizeWallet(wallet);

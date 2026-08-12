@@ -28,6 +28,19 @@ const DEFAULTS = Object.freeze({
   landingMinAirTime: 0.28,
   landingBoostDuration: 0.55,
   landingBoostImpulse: 2.5,
+  // Shortcut branches. The AI commits to a fork about a car-length-per-second
+  // before the mouth, hugs the shoulder it forks from, then drives the branch
+  // polyline. All gains come from the branch being shorter, never from speed.
+  shortcutApproachDistance: 52,
+  shortcutEntryDistance: 16,
+  shortcutEntryOffset: 2.4,
+  shortcutBlendIn: 0.05,
+  shortcutMaxGain: 2.5,
+  shortcutBiasBase: 0.14,
+  shortcutBiasGain: 0.78,
+  // A pad only outranks a fork when the car can still clear the strip and slide
+  // back to the shoulder in time; otherwise a 3 m boost would veto a 30 m cut.
+  shortcutPadYieldDistance: 30,
   // Applied to every rival base speed while track features are supplied: the
   // grid speeds were raised to offset player-only pads, so hand that back once
   // the AI actually uses them. 62 * 0.952 ~= 59, the pre-feature grid speed.
@@ -63,6 +76,77 @@ function normalizeZones(zones, key, fallbackHalfWidth) {
     .sort((a, b) => a.start - b.start);
 }
 
+/**
+ * FNV-1a folded into [0, 1). Used to pin a rival's shortcut taste to its id so
+ * the same grid always makes the same choices, without touching Math.random().
+ */
+function hashUnit(text) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return ((hash >>> 0) % 1000003) / 1000003;
+}
+
+/**
+ * Validated copy of a `featureZonesForPhysics().shortcuts` list, with the branch
+ * polyline pre-measured so driving it is a cursor walk instead of a full scan.
+ * Overlapping (or wrapping) branches are dropped: the per-rival cursor assumes a
+ * strictly ascending, disjoint list, and two branches sharing road is not a line.
+ */
+function normalizeShortcuts(zones, trackLength, maxGain) {
+  const source = Array.isArray(zones?.shortcuts) ? zones.shortcuts : [];
+  const parsed = [];
+  for (const [index, zone] of source.entries()) {
+    if (!Number.isFinite(zone?.start) || !Number.isFinite(zone?.end)) continue;
+    if (zone.end <= zone.start || zone.start < 0 || zone.end > 1) continue;
+    const points = (Array.isArray(zone.points) ? zone.points : [])
+      .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.z))
+      .map((point) => new THREE.Vector3(point.x, Number.isFinite(point.y) ? point.y : 0, point.z));
+    if (points.length < 2) continue;
+
+    const cumulative = [0];
+    for (let step = 1; step < points.length; step += 1) {
+      const previous = points[step - 1];
+      const current = points[step];
+      cumulative.push(cumulative[step - 1] + Math.hypot(current.x - previous.x, current.z - previous.z));
+    }
+    const pathLength = cumulative[cumulative.length - 1];
+    if (!(pathLength > 1)) continue;
+
+    const span = zone.end - zone.start;
+    const spanMeters = span * trackLength;
+    // The branch may never be a wormhole: cap how much lap the AI can buy with
+    // one corridor, and drive the capped length so the cap is actually honoured.
+    const gain = THREE.MathUtils.clamp(spanMeters / pathLength, 1, maxGain);
+    parsed.push(Object.freeze({
+      id: zone.id ?? `shortcut-${index + 1}`,
+      start: zone.start,
+      end: zone.end,
+      span,
+      side: Math.sign(zone.side) || 1,
+      halfWidth: Number.isFinite(zone.halfWidth) ? Math.abs(zone.halfWidth) : 5,
+      savedMeters: Number.isFinite(zone.savedMeters) ? zone.savedMeters : spanMeters - pathLength,
+      points: Object.freeze(points),
+      cumulative: Object.freeze(cumulative),
+      pathLength,
+      spanMeters,
+      gain,
+      driveLength: spanMeters / gain,
+    }));
+  }
+
+  parsed.sort((a, b) => a.start - b.start);
+  const disjoint = [];
+  for (const shortcut of parsed) {
+    const previous = disjoint[disjoint.length - 1];
+    if (previous && shortcut.start < previous.end) continue;
+    disjoint.push(shortcut);
+  }
+  return disjoint;
+}
+
 /** Coordinates AI opponents, live standings and the authoritative race result. */
 export class RaceSystem {
   constructor(options = {}) {
@@ -96,6 +180,7 @@ export class RaceSystem {
         ? source.lane
         : ((index % 2) * 2 - 1) * (1.7 + Math.floor(index / 2) * 0.35);
       const rawBaseSpeed = source.rawBaseSpeed ?? source.baseSpeed ?? source.speed ?? 60;
+      const aggression = THREE.MathUtils.clamp(source.aggression ?? 0.42 + (index % 3) * 0.16, 0.25, 0.9);
       return Object.assign(source, {
         id: source.id ?? `rival-${index + 1}`,
         name: source.name ?? `APEX ${String(index + 2).padStart(2, '0')}`,
@@ -115,7 +200,16 @@ export class RaceSystem {
         finished: false,
         finishTime: null,
         skill: THREE.MathUtils.clamp(source.skill ?? 0.96 + index * 0.012, 0.88, 1.04),
-        aggression: THREE.MathUtils.clamp(source.aggression ?? 0.42 + (index % 3) * 0.16, 0.25, 0.9),
+        aggression,
+        // Taste for cutting corners: pushy drivers take more forks. Combined
+        // with a per-(rival, branch) hash it decides each fork exactly once.
+        shortcutBias: THREE.MathUtils.clamp(
+          Number.isFinite(source.shortcutBias)
+            ? source.shortcutBias
+            : this.config.shortcutBiasBase + aggression * this.config.shortcutBiasGain,
+          0,
+          1,
+        ),
       });
     });
     this.activeRivalCount = THREE.MathUtils.clamp(
@@ -126,6 +220,11 @@ export class RaceSystem {
 
     this._featurePads = [];
     this._featureRamps = [];
+    this._featureShortcuts = [];
+    this._shortcutPoint = new THREE.Vector3();
+    this._shortcutTangent = new THREE.Vector3(0, 0, 1);
+    this._laneAnchor = new THREE.Vector3();
+    this._scratch = new THREE.Vector3();
     this._speedCompensationOverride = Number.isFinite(options.speedCompensation)
       ? options.speedCompensation
       : null;
@@ -156,8 +255,9 @@ export class RaceSystem {
   }
 
   /**
-   * `trackFeatures` accepts a `featureZonesForPhysics()` payload (`{ pads, ramps }`)
-   * and `speedCompensation` overrides the automatic rival speed scaling.
+   * `trackFeatures` accepts a `featureZonesForPhysics()` payload
+   * (`{ pads, ramps, shortcuts }`) and `speedCompensation` overrides the
+   * automatic rival speed scaling.
    * Both keys are optional; omitting them leaves the current setup untouched.
    */
   configure(options = {}) {
@@ -180,22 +280,32 @@ export class RaceSystem {
     return this;
   }
 
-  /** Boost pads / jump ramps the AI should drive over. Pass null to clear them. */
+  /**
+   * Boost pads / jump ramps / shortcut branches the AI should use. Pass null to
+   * clear them.
+   */
   setTrackFeatures(zones = null) {
     const fallbackHalfWidth = Math.max(1, this.config.trackWidth * 0.5);
     this._featurePads = normalizeZones(zones, 'pads', fallbackHalfWidth);
     this._featureRamps = normalizeZones(zones, 'ramps', fallbackHalfWidth);
+    this._featureShortcuts = normalizeShortcuts(zones, this.trackLength, this.config.shortcutMaxGain);
     this._applySpeedCompensation();
     for (const rival of this.rivals) this._resetRivalFeatureState(rival);
     return this;
   }
 
   get hasTrackFeatures() {
-    return this._featurePads.length > 0 || this._featureRamps.length > 0;
+    return this._featurePads.length > 0
+      || this._featureRamps.length > 0
+      || this._featureShortcuts.length > 0;
   }
 
   getTrackFeatures() {
-    return { pads: this._featurePads.slice(), ramps: this._featureRamps.slice() };
+    return {
+      pads: this._featurePads.slice(),
+      ramps: this._featureRamps.slice(),
+      shortcuts: this._featureShortcuts.slice(),
+    };
   }
 
   _applySpeedCompensation() {
@@ -223,6 +333,14 @@ export class RaceSystem {
     rival.airborne = false;
     rival.airTime = 0;
     rival.activeRamp = null;
+    rival.shortcutCursor = 0;
+    rival.activeShortcut = null;
+    rival.shortcutId = null;
+    rival.shortcutCommitId = null;
+    rival.shortcutLocal = 0;
+    rival.shortcutBase = 0;
+    rival.shortcutSegment = 0;
+    rival.shortcutEntryLane = 0;
   }
 
   reset() {
@@ -330,7 +448,12 @@ export class RaceSystem {
     const gapToPlayer = (playerProgress - rival.raceProgress) * this.trackLength;
     const rubberBand = THREE.MathUtils.clamp(gapToPlayer / 170, -1, 1) * this.config.rubberBandStrength;
 
-    if (rival.maneuverTime <= 0) {
+    if (rival.activeShortcut) {
+      // A branch corridor owns the line until it rejoins: there is nowhere to
+      // swerve to, so defending and overtaking sit this stretch out.
+      rival.maneuver = 'shortcut';
+      rival.maneuverTime = 0;
+    } else if (rival.maneuverTime <= 0) {
       rival.maneuver = 'line';
       rival.targetLane = rival.baseLane;
       const threatDistance = (rival.raceProgress - playerProgress) * this.trackLength;
@@ -357,8 +480,10 @@ export class RaceSystem {
 
     // Feature line sits below collision avoidance (applied in _separateFromPlayer)
     // and above plain cruising, so it only bends the racing line while on 'line'.
-    if (rival.maneuver === 'line') this._applyFeatureLine(rival);
-    else rival.featureTarget = null;
+    if (rival.maneuver === 'line') {
+      this._applyFeatureLine(rival);
+      this._applyShortcutLine(rival);
+    } else rival.featureTarget = null;
 
     const laneResponse = rival.airborne
       ? this.config.laneResponse * this.config.rampAirLaneResponse
@@ -380,9 +505,7 @@ export class RaceSystem {
       this.config.aiAcceleration * delta,
     );
     rival.speed += speedDelta;
-    rival.raceProgress += (rival.speed / this.trackLength) * delta;
-    rival.totalProgress = rival.raceProgress;
-    rival.progress = wrap01(this.startProgress + rival.raceProgress);
+    this._advanceProgress(rival, delta);
     this._triggerPadBoost(rival);
     this._separateFromPlayer(rival, delta);
     this._updateRivalHeight(rival, delta);
@@ -405,6 +528,7 @@ export class RaceSystem {
     if (progress < rival.featureCursorProgress) {
       rival.padCursor = 0;
       rival.rampCursor = 0;
+      rival.shortcutCursor = 0;
     }
     rival.featureCursorProgress = progress;
     let cursor = rival[cursorKey];
@@ -437,11 +561,196 @@ export class RaceSystem {
 
   _applyFeatureLine(rival) {
     rival.featureTarget = null;
-    if (this._featurePads.length === 0 || rival.airborne) return;
+    if (this._featurePads.length === 0 || rival.airborne || rival.activeShortcut) return;
     const upcoming = this._nextPad(rival);
     if (!upcoming || upcoming.distance > this.config.padApproachDistance) return;
     rival.featureTarget = upcoming.pad.id;
     rival.targetLane = this._padTargetLane(rival, upcoming.pad);
+  }
+
+  // -- Shortcut branches ----------------------------------------------------
+
+  /**
+   * Whether this rival drives that branch. Pure and stable: a per-rival taste
+   * value against a hash of `rivalId::shortcutId`, so a grid makes the same
+   * calls every run and never flickers mid-approach.
+   */
+  _takesShortcut(rival, shortcut) {
+    const bias = THREE.MathUtils.clamp(rival.shortcutBias ?? 0, 0, 1);
+    if (bias <= 0) return false;
+    if (bias >= 1) return true;
+    return hashUnit(`${rival.id}::${shortcut.id}`) < bias;
+  }
+
+  /** Next branch on the lap plus its signed distance in meters (<= 0 means inside). */
+  _nextShortcut(rival) {
+    const shortcuts = this._featureShortcuts;
+    if (shortcuts.length === 0) return null;
+    const shortcut = this._advanceCursor(rival, shortcuts, 'shortcutCursor');
+    if (shortcut) return { shortcut, distance: (shortcut.start - rival.progress) * this.trackLength };
+    const wrapped = shortcuts[0];
+    return { shortcut: wrapped, distance: (1 - rival.progress + wrapped.start) * this.trackLength };
+  }
+
+  /**
+   * Approach line for a branch the rival intends to take: commit ~50 m out and
+   * slide onto the shoulder the fork peels off from. A pad keeps priority only
+   * while it can be taken and still left with room to reach that shoulder: a
+   * boost strip is worth a few meters, a branch is worth tens of them.
+   */
+  _applyShortcutLine(rival) {
+    if (this._featureShortcuts.length === 0 || rival.airborne || rival.activeShortcut) return;
+    const upcoming = this._nextShortcut(rival);
+    if (!upcoming) return;
+    const { shortcut, distance } = upcoming;
+    if (distance > this.config.shortcutApproachDistance || distance < -this.config.shortcutEntryDistance) {
+      rival.shortcutCommitId = null;
+      return;
+    }
+    if (!this._takesShortcut(rival, shortcut)) {
+      rival.shortcutCommitId = null;
+      return;
+    }
+    if (rival.featureTarget) {
+      const upcomingPad = this._nextPad(rival);
+      const padExit = upcomingPad
+        ? (upcomingPad.pad.end - rival.progress) * this.trackLength
+        : Infinity;
+      if (padExit + this.config.shortcutPadYieldDistance < distance) return;
+    }
+    rival.shortcutCommitId = shortcut.id;
+    rival.featureTarget = null;
+    rival.targetLane = this._clampLane(shortcut.side * this.config.trackWidth * 0.32);
+  }
+
+  /**
+   * Takes the fork if the rival committed to it and actually arrived on the
+   * right shoulder. Getting shoved off that line by avoidance simply means the
+   * branch is missed this lap, which keeps collision handling on top.
+   */
+  _tryEnterShortcut(rival) {
+    if (rival.airborne || rival.activeShortcut) return;
+    const upcoming = this._nextShortcut(rival);
+    if (!upcoming) return;
+    const { shortcut, distance } = upcoming;
+    if (distance > 0 || -distance > this.config.shortcutEntryDistance) return;
+    if (rival.shortcutCommitId !== shortcut.id) return;
+    if (Math.sign(rival.lane) !== shortcut.side) return;
+    if (Math.abs(rival.lane) < this.config.shortcutEntryOffset) return;
+
+    // Enter where the car actually is, so lap progress never jumps at the mouth.
+    const overshoot = THREE.MathUtils.clamp((rival.progress - shortcut.start) / shortcut.span, 0, 0.5);
+    rival.activeShortcut = shortcut;
+    rival.shortcutId = shortcut.id;
+    rival.shortcutLocal = overshoot;
+    rival.shortcutBase = rival.raceProgress - shortcut.span * overshoot;
+    rival.shortcutSegment = 0;
+    rival.shortcutEntryLane = rival.lane;
+    rival.maneuver = 'shortcut';
+    rival.maneuverTime = 0;
+    rival.featureTarget = null;
+    this._updateShortcutPose(rival);
+    this._emit('rivalShortcutEnter', { rival, shortcutId: shortcut.id, savedMeters: shortcut.savedMeters });
+  }
+
+  _exitShortcut(rival, shortcut) {
+    rival.activeShortcut = null;
+    rival.shortcutId = null;
+    rival.shortcutCommitId = null;
+    rival.shortcutLocal = 0;
+    rival.shortcutSegment = 0;
+    rival.maneuver = 'line';
+    rival.maneuverTime = 0;
+    rival.targetLane = rival.baseLane;
+    this._emit('rivalShortcutExit', { rival, shortcutId: shortcut.id, savedMeters: shortcut.savedMeters });
+  }
+
+  /**
+   * Point and heading at `u` (0..1 of branch arc length) into `_shortcutPoint` /
+   * `_shortcutTangent`. The per-rival segment index only walks forward, so a
+   * pass costs one or two segment tests instead of scanning the polyline.
+   */
+  _sampleShortcutPath(shortcut, u, rival = null) {
+    const { points, cumulative, pathLength } = shortcut;
+    const distance = THREE.MathUtils.clamp(u, 0, 1) * pathLength;
+    const last = points.length - 2;
+    let index = THREE.MathUtils.clamp(rival?.shortcutSegment ?? 0, 0, last);
+    if (cumulative[index] > distance) index = 0;
+    while (index < last && cumulative[index + 1] <= distance) index += 1;
+    if (rival) rival.shortcutSegment = index;
+
+    const from = points[index];
+    const to = points[index + 1];
+    const segmentLength = cumulative[index + 1] - cumulative[index];
+    const t = segmentLength > EPSILON
+      ? THREE.MathUtils.clamp((distance - cumulative[index]) / segmentLength, 0, 1)
+      : 0;
+    this._shortcutPoint.copy(from).lerp(to, t);
+    this._shortcutTangent.subVectors(to, from).setY(0);
+    if (this._shortcutTangent.lengthSq() < EPSILON) this._shortcutTangent.set(0, 0, 1);
+    else this._shortcutTangent.normalize();
+    return index;
+  }
+
+  /**
+   * World pose while on a branch. `lane` keeps reporting the signed distance
+   * from the main centre line, which is what the avoidance and overtake checks
+   * read, so a car out on a corridor simply reads as unreachably wide.
+   */
+  _updateShortcutPose(rival) {
+    const shortcut = rival.activeShortcut;
+    if (!shortcut) return;
+    this._sampleShortcutPath(shortcut, rival.shortcutLocal, rival);
+    this.trackCurve.getPointAt(rival.progress, this._point);
+    this.trackCurve.getTangentAt(rival.progress, this._tangent).setY(0).normalize();
+    this._side.crossVectors(_up, this._tangent).normalize();
+
+    // The branch mouth sits just outside the drivable strip; ease across that
+    // last metre instead of snapping the car sideways on the entry frame.
+    const blend = THREE.MathUtils.clamp(rival.shortcutLocal / this.config.shortcutBlendIn, 0, 1);
+    if (blend < 1) {
+      this._scratch.copy(this._shortcutPoint);
+      this._laneAnchor.copy(this._point).addScaledVector(this._side, rival.shortcutEntryLane);
+      this._shortcutPoint.copy(this._laneAnchor).lerp(this._scratch, blend);
+    }
+
+    rival.shortcutWorld = (rival.shortcutWorld ?? new THREE.Vector3()).copy(this._shortcutPoint);
+    rival.shortcutHeading = (rival.shortcutHeading ?? new THREE.Vector3()).copy(this._shortcutTangent);
+    const lateral = this._scratch.subVectors(this._shortcutPoint, this._point).dot(this._side);
+    rival.lane = lateral;
+    rival.targetLane = lateral;
+  }
+
+  /**
+   * Lap progress for one frame. On a branch the car covers `driveLength` meters
+   * of tarmac for a full `span` of lap, so the same speed buys more track — the
+   * whole shortcut payoff, with no speed bonus anywhere.
+   */
+  _advanceProgress(rival, delta) {
+    const shortcut = rival.activeShortcut;
+    if (shortcut) {
+      rival.shortcutLocal += (rival.speed * delta) / shortcut.driveLength;
+      if (rival.shortcutLocal >= 1) {
+        const leftover = (rival.shortcutLocal - 1) * shortcut.driveLength;
+        rival.shortcutLocal = 1;
+        rival.raceProgress = rival.shortcutBase + shortcut.span + leftover / this.trackLength;
+        this._syncRivalProgress(rival);
+        this._exitShortcut(rival, shortcut);
+        return;
+      }
+      rival.raceProgress = rival.shortcutBase + shortcut.span * rival.shortcutLocal;
+      this._syncRivalProgress(rival);
+      this._updateShortcutPose(rival);
+      return;
+    }
+    rival.raceProgress += (rival.speed / this.trackLength) * delta;
+    this._syncRivalProgress(rival);
+    if (this._featureShortcuts.length > 0) this._tryEnterShortcut(rival);
+  }
+
+  _syncRivalProgress(rival) {
+    rival.totalProgress = rival.raceProgress;
+    rival.progress = wrap01(this.startProgress + rival.raceProgress);
   }
 
   _boostCeiling(rival) {
@@ -449,7 +758,7 @@ export class RaceSystem {
   }
 
   _triggerPadBoost(rival) {
-    if (this._featurePads.length === 0 || rival.airborne) return;
+    if (this._featurePads.length === 0 || rival.airborne || rival.activeShortcut) return;
     const upcoming = this._nextPad(rival);
     if (!upcoming || upcoming.distance > 0) return;
     const { pad } = upcoming;
@@ -473,6 +782,13 @@ export class RaceSystem {
    */
   _updateRivalHeight(rival, delta) {
     if (this._featureRamps.length === 0) return;
+    if (rival.activeShortcut) {
+      // Branch corridors are bare tarmac: no ramp on the main line can be
+      // straddled from out there, so settle flat and leave the cursor alone.
+      rival.activeRamp = null;
+      rival.heightOffset = rival.heightOffset > 0.001 ? damp(rival.heightOffset, 0, 12, delta) : 0;
+      return;
+    }
     const candidate = this._advanceCursor(rival, this._featureRamps, 'rampCursor');
     const onRamp = Boolean(candidate)
       && rival.progress >= candidate.start
@@ -539,6 +855,15 @@ export class RaceSystem {
     const playerLane = this.player.state.roadOffset;
     if (longitudinalGap >= 8 || Math.abs(rival.lane - playerLane) >= 4.15) return;
 
+    if (rival.activeShortcut) {
+      // Out on a branch there is no line to swerve to and no shared tarmac to
+      // be shoved along, so the only sane answer is to lift off the throttle.
+      if (rival.raceProgress < playerProgress) {
+        rival.speed = Math.min(rival.speed, Math.max(10, this.player.speed - 1.5));
+      }
+      return;
+    }
+
     const side = Math.abs(rival.lane - playerLane) > 0.2
       ? Math.sign(rival.lane - playerLane)
       : rival.aggression > 0.58 ? 1 : -1;
@@ -602,10 +927,17 @@ export class RaceSystem {
 
   _placeRival(rival, delta) {
     if (!rival.object) return;
-    this.trackCurve.getPointAt(rival.progress, this._point);
-    this.trackCurve.getTangentAt(rival.progress, this._tangent).normalize();
+    const shortcut = rival.activeShortcut;
+    if (shortcut) {
+      this._point.copy(rival.shortcutWorld);
+      this._tangent.copy(rival.shortcutHeading);
+    } else {
+      this.trackCurve.getPointAt(rival.progress, this._point);
+      this.trackCurve.getTangentAt(rival.progress, this._tangent).normalize();
+    }
     this._side.crossVectors(_up, this._tangent).normalize();
-    rival.object.position.copy(this._point).addScaledVector(this._side, rival.lane);
+    rival.object.position.copy(this._point);
+    if (!shortcut) rival.object.position.addScaledVector(this._side, rival.lane);
     rival.object.position.y += 0.04 + Math.max(0, rival.heightOffset ?? 0);
     this._matrix.makeBasis(this._side, _up, this._tangent);
     this._quaternion.setFromRotationMatrix(this._matrix);
