@@ -11,7 +11,7 @@ import {
   formatRank,
   getRankTier,
   normalizeRankState,
-} from '../src/ranked.js';
+} from './ranked-rules.mjs';
 
 export const RANKED_STORE_VERSION = 1;
 

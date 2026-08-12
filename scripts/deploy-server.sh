@@ -27,11 +27,26 @@ trap rollback EXIT
 
 install -m 0644 "${PROJECT_DIR}/server/index.mjs" "${STAGE_DIR}/index.mjs"
 install -m 0644 "${PROJECT_DIR}/server/race-validation.mjs" "${STAGE_DIR}/race-validation.mjs"
+install -m 0644 "${PROJECT_DIR}/server/ranked-store.mjs" "${STAGE_DIR}/ranked-store.mjs"
+# The release directory is flat, so `../src/` is unreachable there. Stage the
+# shared rank rules under the name the server imports (see server/ranked-rules.mjs).
+install -m 0644 "${PROJECT_DIR}/src/ranked.js" "${STAGE_DIR}/ranked-rules.mjs"
 install -m 0644 "${PROJECT_DIR}/server/package.json" "${STAGE_DIR}/package.json"
 install -m 0644 "${PROJECT_DIR}/server/package-lock.json" "${STAGE_DIR}/package-lock.json"
 npm ci --omit=dev --ignore-scripts --prefix "${STAGE_DIR}"
 node --check "${STAGE_DIR}/index.mjs"
 node --check "${STAGE_DIR}/race-validation.mjs"
+node --check "${STAGE_DIR}/ranked-store.mjs"
+node --check "${STAGE_DIR}/ranked-rules.mjs"
+# Resolve the full import graph before switching: `node --check` only parses,
+# it would not have caught the missing ranked-store module that broke a deploy.
+node --input-type=module --eval "
+  import { createRankedStore } from '${STAGE_DIR}/ranked-store.mjs';
+  import { validateRaceState } from '${STAGE_DIR}/race-validation.mjs';
+  if (typeof createRankedStore !== 'function' || typeof validateRaceState !== 'function') {
+    throw new Error('staged multiplayer modules are incomplete');
+  }
+"
 chmod 0755 "${STAGE_DIR}"
 
 mkdir -p "${RELEASE_DIR}"
