@@ -39,8 +39,8 @@ export function createSky(root) {
   root.add(sky);
 }
 
-export function createRain(root, random) {
-  const count = 4200;
+export function createRain(root, random, options = {}) {
+  const count = options.qualityTier === 'balanced' ? 2600 : options.qualityTier === 'ultra' ? 7200 : 4200;
   const positions = new Float32Array(count * 3);
   const speeds = new Float32Array(count);
   for (let i = 0; i < count; i += 1) {
@@ -93,8 +93,8 @@ export function createRain(root, random) {
   return rain;
 }
 
-export function createAtmosphere(root, random) {
-  const starCount = 1400;
+export function createAtmosphere(root, random, options = {}) {
+  const starCount = options.qualityTier === 'balanced' ? 900 : options.qualityTier === 'ultra' ? 2600 : 1400;
   const positions = new Float32Array(starCount * 3);
   const colors = new Float32Array(starCount * 3);
   const cyan = new THREE.Color(0xa9edff);
@@ -133,13 +133,14 @@ export function createAtmosphere(root, random) {
   return stars;
 }
 
-export function addWorldLights(root) {
+export function addWorldLights(root, options = {}) {
   const hemisphere = new THREE.HemisphereLight(0x7dcfe4, 0x09100f, 2.05);
   root.add(hemisphere);
   const moonLight = new THREE.DirectionalLight(0xb7e7f2, 3.05);
   moonLight.position.set(-230, 340, -260);
   moonLight.castShadow = true;
-  moonLight.shadow.mapSize.set(2048, 2048);
+  const shadowSize = options.qualityTier === 'ultra' ? 4096 : options.qualityTier === 'balanced' ? 1024 : 2048;
+  moonLight.shadow.mapSize.set(shadowSize, shadowSize);
   moonLight.shadow.camera.left = -180;
   moonLight.shadow.camera.right = 180;
   moonLight.shadow.camera.top = 180;

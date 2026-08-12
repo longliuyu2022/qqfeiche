@@ -60,6 +60,8 @@ const DEFAULTS = Object.freeze({
   miniBoostSpeedMultiplier: 1.16,
   doubleBoostAcceleration: 14,
   doubleBoostSpeedMultiplier: 1.24,
+  cwwBoostDuration: 0.88,
+  wcwBoostDuration: 0.68,
   launchPerfectDuration: 1.05,
   launchGoodDuration: 0.6,
   launchPerfectImpulse: 9,
@@ -229,6 +231,8 @@ export class ArcadeVehicle {
       miniBoostTime: 0,
       miniBoostLevel: 0,
       boostChain: 0,
+      lastBoostTechnique: null,
+      techniqueBoosts: 0,
       chargeLevel: 0,
       airborne: false,
       airTime: 0,
@@ -682,6 +686,8 @@ export class ArcadeVehicle {
     this.state.miniBoostTime = 0;
     this.state.miniBoostLevel = 0;
     this.state.boostChain = 0;
+    this.state.lastBoostTechnique = null;
+    this.state.techniqueBoosts = 0;
     this.state.chargeLevel = 0;
     this.state.airborne = false;
     this.state.airTime = 0;
@@ -811,6 +817,8 @@ export class ArcadeVehicle {
       this.state.nitroChainTime = 0;
       this.state.nitroLinks = 0;
       this.state.boostChain = 0;
+      this.state.lastBoostTechnique = null;
+      this.state.techniqueBoosts = 0;
       this.state.chargeLevel = 0;
       this.state.launchQuality = null;
       this.state.onShortcut = false;
@@ -1779,15 +1787,7 @@ export class ArcadeVehicle {
 
     const boostStarted = this.state.isBoosting && !this._wasBoosting;
     if (boostStarted && this.state.miniBoostTime > 0 && this.state.miniBoostLevel === 1) {
-      this.state.miniBoostLevel = 2;
-      this.state.miniBoostTime = Math.max(this.state.miniBoostTime, 0.5);
-      const doubleBonus = 240 * this.state.comboMultiplier;
-      this.state.skillScore += doubleBonus;
-      this._emit('doubleBoost', {
-        chain: this.state.boostChain,
-        bonus: Math.round(doubleBonus),
-        state: this.getSnapshot(),
-      });
+      this._triggerTechniqueBoost('WCW', this.config.wcwBoostDuration);
     }
     if (boostStarted && this._pendingNitroLinks > 0 && this.state.comboTime > 0) {
       this._pendingNitroLinks -= 1;
@@ -1831,6 +1831,7 @@ export class ArcadeVehicle {
       this.state.comboTime = this.config.comboWindow;
       this._pendingNitroLinks = Math.min(3, this._pendingNitroLinks + 1);
       this._triggerMiniBoost(1, this.config.miniBoostDuration, 'drift');
+      if (this.state.isBoosting) this._triggerTechniqueBoost('CWW', this.config.cwwBoostDuration);
       this._emit('driftEnd', {
         points: banked,
         combo: this.state.combo,
@@ -1861,6 +1862,21 @@ export class ArcadeVehicle {
       level,
       source,
       chain: this.state.boostChain,
+      state: this.getSnapshot(),
+    });
+  }
+
+  _triggerTechniqueBoost(technique, duration) {
+    this.state.miniBoostLevel = 2;
+    this.state.miniBoostTime = Math.max(this.state.miniBoostTime, duration);
+    this.state.lastBoostTechnique = technique;
+    this.state.techniqueBoosts += 1;
+    const doubleBonus = (technique === 'CWW' ? 320 : 240) * this.state.comboMultiplier;
+    this.state.skillScore += doubleBonus;
+    this._emit('doubleBoost', {
+      technique,
+      chain: this.state.boostChain,
+      bonus: Math.round(doubleBonus),
       state: this.getSnapshot(),
     });
   }

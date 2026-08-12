@@ -527,7 +527,7 @@ function createSky(root, theme) {
 }
 
 function createGround(root, theme, random, qualityTier, curve, clearance) {
-  const segments = qualityTier === 'balanced' ? 44 : 72;
+  const segments = qualityTier === 'balanced' ? 44 : qualityTier === 'ultra' ? 108 : 72;
   const geometry = new THREE.PlaneGeometry(1450, 1450, segments, segments);
   const positions = geometry.attributes.position;
   for (let index = 0; index < positions.count; index += 1) {
@@ -550,8 +550,8 @@ function createGround(root, theme, random, qualityTier, curve, clearance) {
   markClearanceExempt(ground, CLEARANCE_EXEMPT.TERRAIN);
   root.add(ground);
 
-  const mountainCount = qualityTier === 'balanced' ? 32 : 54;
-  const mountainGeometry = createMountainGeometry(qualityTier === 'balanced' ? 14 : 18, 8);
+  const mountainCount = qualityTier === 'balanced' ? 32 : qualityTier === 'ultra' ? 76 : 54;
+  const mountainGeometry = createMountainGeometry(qualityTier === 'balanced' ? 14 : qualityTier === 'ultra' ? 24 : 18, qualityTier === 'ultra' ? 10 : 8);
   const rockMaterial = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.94, flatShading: false });
   applyPbr(rockMaterial, 'dark_rock', [2, 3]);
   const mountains = new THREE.InstancedMesh(mountainGeometry, rockMaterial, mountainCount);
@@ -717,7 +717,7 @@ function createRoad(root, curve, theme, qualityTier, shortcuts) {
 }
 
 function createTracksideVegetation(root, curve, theme, random, qualityTier, kind, clearance) {
-  const count = qualityTier === 'balanced' ? 92 : 190;
+  const count = qualityTier === 'balanced' ? 92 : qualityTier === 'ultra' ? 300 : 190;
   const point = new THREE.Vector3();
   const tangent = new THREE.Vector3();
   const side = new THREE.Vector3();
@@ -785,7 +785,7 @@ function createTracksideVegetation(root, curve, theme, random, qualityTier, kind
 }
 
 function createRockFormations(root, curve, theme, random, qualityTier, kind, clearance) {
-  const count = qualityTier === 'balanced' ? 38 : 72;
+  const count = qualityTier === 'balanced' ? 38 : qualityTier === 'ultra' ? 110 : 72;
   const geometry = kind === 'canyon'
     ? new THREE.CylinderGeometry(0.72, 1, 1, 9, 3)
     : new THREE.DodecahedronGeometry(1, 1);
@@ -878,7 +878,7 @@ function createStartComplex(root, curve, theme) {
 }
 
 function createClouds(root, theme, random, qualityTier) {
-  const clusterCount = qualityTier === 'balanced' ? 10 : 18;
+  const clusterCount = qualityTier === 'balanced' ? 10 : qualityTier === 'ultra' ? 28 : 18;
   const puffCount = clusterCount * 5;
   const material = new THREE.MeshBasicMaterial({
     color: theme.cloudColor,
@@ -910,7 +910,7 @@ function createClouds(root, theme, random, qualityTier) {
 }
 
 function createWeather(root, kind, random, qualityTier) {
-  const count = qualityTier === 'balanced' ? 520 : 1100;
+  const count = qualityTier === 'balanced' ? 520 : qualityTier === 'ultra' ? 1900 : 1100;
   const positions = new Float32Array(count * 3);
   for (let index = 0; index < count; index += 1) {
     positions[index * 3] = (random() - 0.5) * 920;
@@ -1102,7 +1102,7 @@ function addLights(root, theme, qualityTier) {
   const sun = new THREE.DirectionalLight(theme.sun, theme.sunIntensity);
   sun.position.set(...theme.sunPosition);
   sun.castShadow = qualityTier !== 'balanced';
-  const shadowSize = qualityTier === 'balanced' ? 1024 : 2048;
+  const shadowSize = qualityTier === 'balanced' ? 1024 : qualityTier === 'ultra' ? 4096 : 2048;
   sun.shadow.mapSize.set(shadowSize, shadowSize);
   sun.shadow.camera.left = -260;
   sun.shadow.camera.right = 260;
@@ -1119,7 +1119,7 @@ function addLights(root, theme, qualityTier) {
  * Builds one of the three scenic maps.
  *
  * `options`:
- *   - `qualityTier`: 'balanced' | 'high' (unchanged).
+ *   - `qualityTier`: 'balanced' | 'high' | 'ultra'.
  *   - `shortcutZones`: optional `[{ start, end, side, halfWidth, points }]`.
  *     `start`/`end`/`side` punch an opening in the guardrail for a shortcut
  *     mouth (start > end wraps past the start/finish line, side 1 = positive
@@ -1131,7 +1131,7 @@ export function createScenicWorld(scene, trackId, options = {}) {
   const curve = SCENIC_TRACK_CURVES[trackId];
   const theme = THEMES[trackId];
   if (!curve || !theme) throw new Error(`Unknown scenic track: ${trackId}`);
-  const qualityTier = options.qualityTier === 'balanced' ? 'balanced' : 'high';
+  const qualityTier = options.qualityTier === 'balanced' ? 'balanced' : options.qualityTier === 'ultra' ? 'ultra' : 'high';
   const shortcuts = createShortcutMask(options.shortcutZones);
   const clearance = createClearanceField(curve, { shortcutZones: options.shortcutZones });
   const random = seededRandom(theme.seed);

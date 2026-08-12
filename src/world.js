@@ -2028,8 +2028,8 @@ function createLamps(root) {
  * Builds the Neon Apex night map.
  *
  * `options`:
- *   - `qualityTier`: accepted for API parity with the other maps; the night map
- *     has a single detail level, so it is currently unused.
+ *   - `qualityTier`: 'balanced' | 'high' | 'ultra'; controls atmospheric
+ *     particle density and shadow resolution.
  *   - `shortcutZones`: optional `[{ start, end, side, halfWidth, points }]`.
  *     `start`/`end`/`side` open the guardrail at a shortcut mouth (start > end
  *     wraps past the start/finish line, side 1 = positive lateral, i.e. along
@@ -2038,6 +2038,7 @@ function createLamps(root) {
  *     no-scenery corridor. Omitting the option keeps the map exactly as it was.
  */
 export function createWorld(scene, options = {}) {
+  const qualityTier = options.qualityTier ?? 'high';
   const shortcuts = createShortcutMask(options.shortcutZones);
   const clearance = createClearanceField(TRACK_CURVE, { shortcutZones: options.shortcutZones });
   const random = seededRandom();
@@ -2048,7 +2049,7 @@ export function createWorld(scene, options = {}) {
   scene.add(world);
 
   addTagged(world, CLEARANCE_EXEMPT.BACKDROP, () => createSky(world));
-  addWorldLights(world);
+  addWorldLights(world, { qualityTier });
   const water = createTerrain(world, random, clearance);
   const road = addTagged(world, CLEARANCE_EXEMPT.ROAD, () => createRoad(world, shortcuts));
   addTagged(world, CLEARANCE_EXEMPT.ROAD, () => createWetPatches(world, random));
@@ -2061,8 +2062,8 @@ export function createWorld(scene, options = {}) {
   createTracksideNature(world, random, clearance);
   addTagged(world, CLEARANCE_EXEMPT.FURNITURE, () => createRoadsideDetails(world));
   addTagged(world, CLEARANCE_EXEMPT.FURNITURE, () => createLamps(world));
-  const stars = addTagged(world, CLEARANCE_EXEMPT.BACKDROP, () => createAtmosphere(world, random));
-  const rain = addTagged(world, CLEARANCE_EXEMPT.BACKDROP, () => createRain(world, random));
+  const stars = addTagged(world, CLEARANCE_EXEMPT.BACKDROP, () => createAtmosphere(world, random, { qualityTier }));
+  const rain = addTagged(world, CLEARANCE_EXEMPT.BACKDROP, () => createRain(world, random, { qualityTier }));
 
   const harborWaterMaterial = harbor.userData.waterMaterial;
   const animated = { stars, rain, water, harborWaterMaterial, tunnelNeonMaterial, urbanPortalMaterial };

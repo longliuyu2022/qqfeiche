@@ -84,7 +84,13 @@ function resolveQualityTier(detectedTier) {
 }
 
 const canvas = document.querySelector('#game');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  antialias: true,
+  powerPreference: 'high-performance',
+  stencil: false,
+  depth: true,
+});
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = activeTrack.exposure;
@@ -94,6 +100,17 @@ const runtimeMonitor = createRuntimeMonitor({ renderer, canvas });
 const detectedQualityTier = runtimeMonitor.snapshot().qualityTier;
 let qualityTier = resolveQualityTier(detectedQualityTier);
 renderer.shadowMap.enabled = qualityTier !== 'balanced';
+renderer.shadowMap.type = qualityTier === 'ultra' ? THREE.VSMShadowMap : THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = true;
+
+const [gtaoModule, smaaModule] = qualityTier === 'balanced'
+  ? [{ GTAOPass: null }, { SMAAPass: null }]
+  : await Promise.all([
+    import('three/addons/postprocessing/GTAOPass.js'),
+    import('three/addons/postprocessing/SMAAPass.js'),
+  ]);
+const GTAOPass = gtaoModule.GTAOPass;
+const SMAAPass = smaaModule.SMAAPass;
 
 const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -101,26 +118,43 @@ const fallbackEnvironment = pmrem.fromScene(new RoomEnvironment(), 0.04);
 scene.environment = fallbackEnvironment.texture;
 scene.environmentIntensity = activeTrack.environmentIntensity;
 pmrem.dispose();
-if (activeTrackId === 'night') {
+if (activeTrack.environmentAsset) {
+  const environmentUrl = `/assets/environment/polyhaven/${activeTrack.environmentAsset}`;
   new RGBELoader().load(
-    '/assets/environment/polyhaven/modern_buildings_night/modern_buildings_night_1k.hdr',
+    environmentUrl,
     (texture) => {
       const hdriPmrem = new THREE.PMREMGenerator(renderer);
       const hdriEnvironment = hdriPmrem.fromEquirectangular(texture);
       scene.environment = hdriEnvironment.texture;
       scene.environmentIntensity = activeTrack.environmentIntensity;
-      scene.environmentRotation.y = 1.1;
+      scene.environmentRotation.y = activeTrack.environmentRotation ?? 0;
       texture.dispose();
       fallbackEnvironment.dispose();
       hdriPmrem.dispose();
     },
     undefined,
-    (error) => runtimeMonitor.assetFailure('modern_buildings_night_1k.hdr', error),
+    (error) => runtimeMonitor.assetFailure(activeTrack.environmentAsset, error),
   );
 }
 const camera = new THREE.PerspectiveCamera(57, 1, 0.1, 1900);
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
+// GTAO supplies the grounded contact shading that flat forward lighting cannot
+// provide. It is kept off on balanced devices because its depth/normal buffer
+// costs more than the mobile preset can afford.
+const gtao = qualityTier === 'balanced' ? null : new GTAOPass(scene, camera, 1, 1);
+if (gtao) {
+  gtao.output = GTAOPass.OUTPUT.Denoise;
+  gtao.blendIntensity = qualityTier === 'ultra' ? 1.28 : 1.05;
+  gtao.updateGtaoMaterial({
+    radius: qualityTier === 'ultra' ? 3.5 : 2.6,
+    distanceExponent: 1.35,
+    thickness: qualityTier === 'ultra' ? 1.35 : 1.1,
+    distanceFallOff: 1.1,
+    scale: 1.15,
+  });
+  composer.addPass(gtao);
+}
 const bloom = new UnrealBloomPass(
   new THREE.Vector2(1, 1),
   activeTrack.bloomStrength,
@@ -130,6 +164,8 @@ const bloom = new UnrealBloomPass(
 composer.addPass(bloom);
 const speedPost = createSpeedPostProcess({ qualityTier });
 composer.addPass(speedPost.pass);
+const smaa = qualityTier === 'balanced' ? null : new SMAAPass();
+if (smaa) composer.addPass(smaa);
 composer.addPass(new OutputPass());
 
 const trackFeatures = computeTrackFeatures(trackCurve, { trackId: activeTrackId, roadWidth: 16 });
@@ -1209,6 +1245,12 @@ function applyPreferences(changes) {
   music.setEnabled(preferences.musicEnabled && !paused);
   qualityTier = resolveQualityTier(detectedQualityTier);
   renderer.shadowMap.enabled = qualityTier !== 'balanced';
+  renderer.shadowMap.type = qualityTier === 'ultra' ? THREE.VSMShadowMap : THREE.PCFSoftShadowMap;
+  if (gtao) {
+    gtao.enabled = qualityTier !== 'balanced';
+    gtao.blendIntensity = qualityTier === 'ultra' ? 1.28 : 1.05;
+  }
+  if (smaa) smaa.enabled = qualityTier !== 'balanced';
   syncSettingsUi();
   resize();
 }
@@ -1594,9 +1636,9 @@ vehicle.on('miniBoost', ({ source, chain }) => {
 vehicle.on('launchBoost', ({ quality }) => {
   if (quality === 'perfect') raceTally.perfectStart = true;
 });
-vehicle.on('doubleBoost', () => {
+vehicle.on('doubleBoost', ({ technique }) => {
   fovRush = 1;
-  showCallout('双喷！', 1);
+  showCallout(technique ? `${technique} 喷！` : '双喷！', 1);
   announce('double_boost');
   haptic([12, 26, 12]);
 });
@@ -1831,7 +1873,7 @@ function resize() {
   const width = window.innerWidth;
   const height = window.innerHeight;
   const mobile = width < 720 || matchMedia('(pointer: coarse)').matches;
-  const tierLimit = qualityTier === 'balanced' ? 0.9 : qualityTier === 'ultra' ? 1.85 : 1.55;
+  const tierLimit = qualityTier === 'balanced' ? 0.9 : qualityTier === 'ultra' ? 2.0 : 1.55;
   const ratio = Math.min(window.devicePixelRatio, mobile ? Math.min(1.25, tierLimit) : tierLimit);
   renderer.setPixelRatio(ratio);
   renderer.setSize(width, height, false);

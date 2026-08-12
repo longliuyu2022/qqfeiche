@@ -47,6 +47,7 @@ assert.deepEqual(saved, {
 });
 assert.deepEqual(loadPreferences(storage), saved);
 assert.equal(normalizePreferences({ quality: 'invalid', lastMode: 'invalid' }).quality, 'auto');
+assert.equal(normalizePreferences({ quality: 'ultra' }).quality, 'ultra');
 assert.equal(normalizePreferences({ lastTrack: 'invalid' }).lastTrack, 'night');
 assert.equal(normalizePreferences({ carId: 'unknown-car' }).carId, 'volt');
 assert.equal(normalizePreferences({ musicVolume: 'loud' }).musicVolume, 0.5);

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import * as THREE from 'three';
 import { ArcadeVehicle } from '../src/driving.js';
 import { TRACK_CURVE } from '../src/world.js';
@@ -14,6 +15,13 @@ import { TRACK_CATALOG, normalizeTrackId } from '../src/track-catalog.js';
 
 const expectedTrackIds = ['night', 'day', 'alpine', 'canyon', 'coast'];
 assert.deepEqual(Object.keys(TRACK_CATALOG), expectedTrackIds);
+for (const track of Object.values(TRACK_CATALOG)) {
+  assert.ok(track.environmentAsset, `${track.id} should define an HDR environment`);
+  assert.ok(
+    fs.existsSync(new URL(`../public/assets/environment/polyhaven/${track.environmentAsset}`, import.meta.url)),
+    `${track.id} HDR environment should exist`,
+  );
+}
 for (const trackId of expectedTrackIds) assert.equal(normalizeTrackId(trackId), trackId);
 assert.equal(normalizeTrackId('unknown'), 'night');
 assert.ok(DAY_TRACK_CURVE.getLength() > 1200, 'day circuit should be race length');

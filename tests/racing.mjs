@@ -147,8 +147,12 @@ const boostCar = new ArcadeVehicle({ driftMinSpeed: 7 });
 boostCar.startRace();
 let miniBoosts = 0;
 let doubleBoosts = 0;
+let lastTechnique = null;
 boostCar.on('miniBoost', () => { miniBoosts += 1; });
-boostCar.on('doubleBoost', () => { doubleBoosts += 1; });
+boostCar.on('doubleBoost', ({ technique }) => {
+  doubleBoosts += 1;
+  lastTechnique = technique;
+});
 for (let step = 0; step < 180; step += 1) boostCar.update(1 / 60, { throttle: 1 });
 for (let step = 0; step < 60; step += 1) {
   boostCar.update(1 / 60, { throttle: 1, steer: 0.6, drift: 1 });
@@ -163,11 +167,24 @@ boostCar.nitro = 60;
 boostCar.update(1 / 60, { throttle: 1, nitro: 1 });
 assert.equal(doubleBoosts, 1, 'firing nitro during a mini boost should upgrade it to a double boost');
 assert.equal(boostCar.state.miniBoostLevel, 2);
+assert.equal(lastTechnique, 'WCW', 'mini boost followed by nitro should register a WCW boost');
 for (let step = 0; step < 40; step += 1) {
   boostCar.update(1 / 60, { throttle: 1, steer: -0.6, drift: 1 });
 }
 boostCar.update(1 / 60, { throttle: 1, steer: 0, drift: 0 });
 assert.equal(boostCar.state.boostChain, 2, 'a second drift inside the combo window should extend the boost chain');
+
+const cwwCar = new ArcadeVehicle({ driftMinSpeed: 7 });
+cwwCar.startRace();
+for (let step = 0; step < 180; step += 1) cwwCar.update(1 / 60, { throttle: 1 });
+for (let step = 0; step < 60; step += 1) {
+  cwwCar.update(1 / 60, { throttle: 1, steer: 0.62, drift: 1 });
+}
+cwwCar.nitro = 60;
+cwwCar.update(1 / 60, { throttle: 1, steer: 0, drift: 0, nitro: 1 });
+assert.equal(cwwCar.state.lastBoostTechnique, 'CWW', 'nitro held through drift exit should register a CWW boost');
+assert.equal(cwwCar.state.miniBoostLevel, 2);
+assert.ok(cwwCar.state.miniBoostTime >= 0.8, 'CWW should keep its longer technique boost window');
 
 const launchCar = new ArcadeVehicle({ trackCurve: curve, trackWidth: 16 });
 launchCar.startRace();

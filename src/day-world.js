@@ -18,6 +18,51 @@ const DAY_COLORS = Object.freeze({
   curbRed: 0xd64b3f,
   curbWhite: 0xf2ead8,
 });
+const BASE_URL = (import.meta.env?.BASE_URL ?? '/').replace(/\/$/, '');
+const textureLoader = new THREE.TextureLoader();
+const dayTexturePromises = new Map();
+
+function loadDayTexture(file, isColor = false) {
+  if (typeof document === 'undefined') return Promise.resolve(null);
+  const url = `${BASE_URL}/assets/environment/polyhaven/asphalt_02/${file}`;
+  if (!dayTexturePromises.has(url)) {
+    dayTexturePromises.set(url, new Promise((resolve) => {
+      textureLoader.load(url, resolve, undefined, () => resolve(null));
+    }));
+  }
+  return dayTexturePromises.get(url).then((source) => {
+    if (!source) return null;
+    const texture = source.clone();
+    texture.needsUpdate = true;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(1.2, 48);
+    texture.anisotropy = 8;
+    if (isColor) texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  });
+}
+
+function createDayRoadMaterial() {
+  const material = new THREE.MeshStandardMaterial({
+    color: DAY_COLORS.road,
+    roughness: 0.72,
+    metalness: 0.04,
+  });
+  for (const [property, file, isColor] of [
+    ['map', 'diffuse.jpg', true],
+    ['normalMap', 'normal-gl.jpg', false],
+    ['roughnessMap', 'roughness.jpg', false],
+  ]) {
+    loadDayTexture(file, isColor).then((texture) => {
+      if (!texture) return;
+      material[property] = texture;
+      if (property === 'normalMap') material.normalScale.set(0.58, 0.58);
+      material.needsUpdate = true;
+    });
+  }
+  return material;
+}
 
 export const DAY_TRACK_POINTS = Object.freeze([
   [236, 7, -42], [264, 11, -164],
@@ -75,7 +120,7 @@ function ribbonGeometry(curve, width, yOffset = 0, samples = 520) {
   return geometry;
 }
 
-function createGround(root, random, clearance) {
+function createGround(root, random, clearance, qualityTier) {
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(1300, 1300, 1, 1),
     new THREE.MeshStandardMaterial({ color: DAY_COLORS.grass, roughness: 1 }),
@@ -91,7 +136,8 @@ function createGround(root, random, clearance) {
     new THREE.MeshStandardMaterial({ color: 0xb0aa55, roughness: 1 }),
     new THREE.MeshStandardMaterial({ color: 0x5d8f47, roughness: 1 }),
   ];
-  for (let i = 0; i < 22; i += 1) {
+  const fieldCount = qualityTier === 'balanced' ? 16 : qualityTier === 'ultra' ? 34 : 22;
+  for (let i = 0; i < fieldCount; i += 1) {
     const field = new THREE.Mesh(
       new THREE.PlaneGeometry(55 + random() * 75, 42 + random() * 82),
       fieldMaterials[i % fieldMaterials.length],
@@ -109,18 +155,19 @@ function createGround(root, random, clearance) {
 
   const hillMaterial = new THREE.MeshStandardMaterial({ color: 0x527a48, roughness: 0.96 });
   const hillGeometry = new THREE.ConeGeometry(1, 1, 9);
-  const hills = new THREE.InstancedMesh(hillGeometry, hillMaterial, 34);
+  const hillCount = qualityTier === 'balanced' ? 24 : qualityTier === 'ultra' ? 50 : 34;
+  const hills = new THREE.InstancedMesh(hillGeometry, hillMaterial, hillCount);
   const hillMatrix = new THREE.Matrix4();
   const hillQuaternion = new THREE.Quaternion();
   const point = new THREE.Vector3();
   const tangent = new THREE.Vector3();
   const side = new THREE.Vector3();
   let placedHills = 0;
-  for (let i = 0; i < 34; i += 1) {
+  for (let i = 0; i < hillCount; i += 1) {
     // Hills ring the circuit rather than the world origin: the old ring
     // (radius 470-585) reached within a few metres of the road wherever the
     // circuit bulged out to radius 320.
-    const progress = ((i + 0.5) / 34 + (random() - 0.5) * 0.01 + 1) % 1;
+    const progress = ((i + 0.5) / hillCount + (random() - 0.5) * 0.01 + 1) % 1;
     DAY_TRACK_CURVE.getPointAt(progress, point);
     DAY_TRACK_CURVE.getTangentAt(progress, tangent).normalize();
     side.crossVectors(UP, tangent).setY(0).normalize();
@@ -168,7 +215,7 @@ function createRoad(root) {
 
   const road = new THREE.Mesh(
     ribbonGeometry(DAY_TRACK_CURVE, 8, 0.1),
-    new THREE.MeshStandardMaterial({ color: DAY_COLORS.road, roughness: 0.78, metalness: 0.04 }),
+    createDayRoadMaterial(),
   );
   road.receiveShadow = true;
   road.name = 'DayCircuitRoad';
@@ -245,14 +292,14 @@ function createCurbsAndBarriers(root, shortcuts) {
   root.add(leftCurbs, rightCurbs, barriers);
 }
 
-function createTrees(root, random, clearance) {
+function createTrees(root, random, clearance, qualityTier) {
   const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 1 });
   const leafMaterials = [0x2f713c, 0x3e8448, 0x568f42].map(
     (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.95 }),
   );
   const trunkGeometry = new THREE.CylinderGeometry(0.25, 0.38, 3.5, 7);
   const crownGeometry = new THREE.ConeGeometry(2.2, 5.8, 8);
-  const count = 145;
+  const count = qualityTier === 'balanced' ? 88 : qualityTier === 'ultra' ? 240 : 145;
   const trunks = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, count);
   const crowns = leafMaterials.map((material) => new THREE.InstancedMesh(crownGeometry, material, Math.ceil(count / 3)));
   const materialIndices = [0, 0, 0];
@@ -370,15 +417,16 @@ function createLandmarks(root, clearance) {
   return startLine;
 }
 
-function createClouds(root, random) {
+function createClouds(root, random, qualityTier) {
   const clouds = new THREE.Group();
   const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.72, depthWrite: false });
   const geometry = new THREE.SphereGeometry(1, 12, 8);
-  const cloudMesh = new THREE.InstancedMesh(geometry, material, 90);
+  const clusterCount = qualityTier === 'balanced' ? 11 : qualityTier === 'ultra' ? 26 : 18;
+  const cloudMesh = new THREE.InstancedMesh(geometry, material, clusterCount * 5);
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
   let instance = 0;
-  for (let i = 0; i < 18; i += 1) {
+  for (let i = 0; i < clusterCount; i += 1) {
     const angle = random() * Math.PI * 2;
     const radius = 230 + random() * 350;
     const base = new THREE.Vector3(Math.cos(angle) * radius, 105 + random() * 75, Math.sin(angle) * radius);
@@ -402,8 +450,8 @@ function createClouds(root, random) {
  * Builds the Sunvale day map.
  *
  * `options`:
- *   - `qualityTier`: accepted for API parity with the other maps; this map has a
- *     single detail level, so it is currently unused.
+ *   - `qualityTier`: 'balanced' | 'high' | 'ultra'; controls scene density and
+ *     shadow resolution.
  *   - `shortcutZones`: optional `[{ start, end, side, halfWidth, points }]`.
  *     `start`/`end`/`side` open the barrier at a shortcut mouth (start > end
  *     wraps past the start/finish line, side 1 = positive lateral). `points`
@@ -411,6 +459,7 @@ function createClouds(root, random) {
  *     Omitting the option keeps the map exactly as it was.
  */
 export function createDayWorld(scene, options = {}) {
+  const qualityTier = options.qualityTier === 'balanced' ? 'balanced' : options.qualityTier === 'ultra' ? 'ultra' : 'high';
   const shortcuts = createShortcutMask(options.shortcutZones);
   const clearance = createClearanceField(DAY_TRACK_CURVE, { shortcutZones: options.shortcutZones });
   const random = seededRandom();
@@ -424,7 +473,8 @@ export function createDayWorld(scene, options = {}) {
   const sun = new THREE.DirectionalLight(0xfff0cf, 4.1);
   sun.position.set(-210, 330, 110);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  const shadowSize = qualityTier === 'balanced' ? 1024 : qualityTier === 'ultra' ? 4096 : 2048;
+  sun.shadow.mapSize.set(shadowSize, shadowSize);
   sun.shadow.camera.left = -230;
   sun.shadow.camera.right = 230;
   sun.shadow.camera.top = 230;
@@ -434,12 +484,12 @@ export function createDayWorld(scene, options = {}) {
   sun.shadow.bias = -0.00025;
   world.add(hemisphere, sun);
 
-  const ground = createGround(world, random, clearance);
+  const ground = createGround(world, random, clearance, qualityTier);
   const road = createRoad(world);
   createCurbsAndBarriers(world, shortcuts);
-  createTrees(world, random, clearance);
+  createTrees(world, random, clearance, qualityTier);
   const startLine = createLandmarks(world, clearance);
-  const clouds = createClouds(world, random);
+  const clouds = createClouds(world, random, qualityTier);
 
   return {
     world,

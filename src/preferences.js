@@ -15,7 +15,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   carId: 'volt',
 });
 
-const QUALITY_OPTIONS = new Set(['auto', 'balanced', 'high']);
+const QUALITY_OPTIONS = new Set(['auto', 'balanced', 'high', 'ultra']);
 const MODE_OPTIONS = new Set(['race', 'items', 'timeTrial', 'drift']);
 const TRACK_OPTIONS = new Set(['night', 'day', 'alpine', 'canyon', 'coast']);
 const CAR_OPTIONS = new Set(['volt', 'raiden', 'nimbus', 'goliath']);

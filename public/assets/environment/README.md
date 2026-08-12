@@ -26,3 +26,7 @@ variant and is used only for scene reflections and image-based lighting.
 | metal_plate | https://polyhaven.com/a/metal_plate | normal-gl.jpg | `d379e66130ad6ccff217ac9b13de935d` |
 | metal_plate | https://polyhaven.com/a/metal_plate | roughness.jpg | `6e1c8672d804b90546a23db621515b16` |
 | modern_buildings_night | https://polyhaven.com/a/modern_buildings_night | modern_buildings_night_1k.hdr | `3067e8d9e8e961e6a11ff45c055a5fbd` |
+| sunny_country_road | https://polyhaven.com/a/sunny_country_road | sunny_country_road_1k.hdr | `44ccb5e272510f49e34835cd3f2a4c1c` |
+| alps_field | https://polyhaven.com/a/alps_field | alps_field_1k.hdr | `1999bed08695f784471ca1c232a732c0` |
+| valley_of_desolation | https://polyhaven.com/a/valley_of_desolation | valley_of_desolation_1k.hdr | `11ad0c81cfc47c7c4bbe16b08e7230ad` |
+| dalkey_view | https://polyhaven.com/a/dalkey_view | dalkey_view_1k.hdr | `c2aebb914dfc297f1ba3629f18f6265b` |
