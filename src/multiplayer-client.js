@@ -1,6 +1,15 @@
 const REQUEST_TIMEOUT_MS = 8000;
 const RECONNECT_WINDOW_MS = 20000;
+const PROBE_INTERVAL_MS = 4000;
 export const PLAYER_ID_KEY = 'neon-apex:player-id:v1';
+
+export function connectionQuality(latencyMs) {
+  if (!Number.isFinite(latencyMs)) return 'unknown';
+  if (latencyMs <= 60) return 'excellent';
+  if (latencyMs <= 120) return 'good';
+  if (latencyMs <= 220) return 'fair';
+  return 'poor';
+}
 
 function defaultSocketUrl() {
   if (!location.host || location.protocol === 'file:') return 'wss://gaokao.aiimage.icu/multiplayer';
@@ -55,10 +64,19 @@ export class MultiplayerClient extends EventTarget {
     this.pending = null;
     this.reconnectStartedAt = 0;
     this.reconnectTimer = null;
+    this.connectionState = 'idle';
+    this.latencyMs = null;
+    this.jitterMs = null;
+    this.clockOffsetMs = 0;
+    this.probeTimer = null;
+    this.probeNonce = 0;
+    this.probes = new Map();
     this.matching = false;
     this.matchStatus = null;
     this.rank = null;
     this.lastRankResult = null;
+    this.lastRaceResult = null;
+    this.seenSettlements = new Set();
     this.localRankState = rankState;
   }
 
@@ -72,6 +90,14 @@ export class MultiplayerClient extends EventTarget {
 
   get isRanked() {
     return Boolean(this.room?.ranked);
+  }
+
+  get networkQuality() {
+    return connectionQuality(this.latencyMs);
+  }
+
+  get serverNow() {
+    return Date.now() + this.clockOffsetMs;
   }
 
   // Rank rows for the current room, ready for lobby rendering.
@@ -144,6 +170,7 @@ export class MultiplayerClient extends EventTarget {
     this.intentionalClose = true;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    this._stopProbes();
     if (this.connected) this.send('leave');
     this.socket?.close(1000, 'leave');
     this.socket = null;
@@ -152,6 +179,7 @@ export class MultiplayerClient extends EventTarget {
     this.reconnectToken = null;
     this.matching = false;
     this.matchStatus = null;
+    this.connectionState = 'idle';
     this.dispatchEvent(new CustomEvent('left'));
   }
 
@@ -171,6 +199,7 @@ export class MultiplayerClient extends EventTarget {
 
   _connect() {
     if (this.connected) return Promise.resolve();
+    this.connectionState = this.reconnectStartedAt ? 'reconnecting' : 'connecting';
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(this.url);
       this.socket = socket;
@@ -180,6 +209,8 @@ export class MultiplayerClient extends EventTarget {
       }, REQUEST_TIMEOUT_MS);
       socket.addEventListener('open', () => {
         clearTimeout(timeout);
+        this.connectionState = 'connected';
+        this._startProbes();
         resolve();
       }, { once: true });
       socket.addEventListener('error', () => {
@@ -202,7 +233,9 @@ export class MultiplayerClient extends EventTarget {
       this.selfId = message.selfId;
       this.reconnectToken = message.reconnectToken;
       this.room = message.room;
-      this.matching = false;
+      this.matching = Boolean(message.room?.ranked && message.room?.phase === 'lobby');
+      this.connectionState = 'connected';
+      this.reconnectStartedAt = 0;
       if (message.rank) this.rank = message.rank;
       this._syncSelfRank();
       if (this.pending) {
@@ -215,9 +248,14 @@ export class MultiplayerClient extends EventTarget {
     }
     if (message.type === 'room') {
       this.room = message.room;
+      this.matching = Boolean(message.room?.ranked && message.room?.phase === 'lobby');
       this._syncSelfRank();
     }
-    if (message.type === 'match-status') this.matchStatus = message;
+    if (message.type === 'match-status') {
+      this.matchStatus = message;
+      this.matching = true;
+      this._syncServerClock(message.serverTime);
+    }
     if (message.type === 'match-cancelled') {
       this.matching = false;
       this.matchStatus = null;
@@ -225,9 +263,25 @@ export class MultiplayerClient extends EventTarget {
       this.selfId = null;
       this.reconnectToken = null;
     }
+    if (message.type === 'prepare' || message.type === 'race-start') this.matching = false;
+    if (message.type === 'race-start') {
+      if (message.raceId && message.raceId !== this.lastRaceResult?.raceId) {
+        this.lastRaceResult = null;
+        this.lastRankResult = null;
+      }
+    }
+    if (message.type === 'race-result') {
+      if (this._isDuplicateSettlement(message)) return;
+      this.lastRaceResult = message;
+    }
     if (message.type === 'rankResult') {
+      if (this._isDuplicateSettlement(message)) return;
       this.lastRankResult = message;
       if (message.rank) this.rank = message.rank;
+    }
+    if (message.type === 'pong') {
+      this._recordPong(message);
+      return;
     }
     if (message.type === 'error' && this.pending) {
       clearTimeout(this.pending.timeout);
@@ -246,20 +300,26 @@ export class MultiplayerClient extends EventTarget {
   _handleClose(socket) {
     if (socket !== this.socket) return;
     this.socket = null;
+    this._stopProbes();
     if (this.pending) {
       clearTimeout(this.pending.timeout);
       this.pending.reject(new Error('连接已断开'));
       this.pending = null;
     }
-    if (this.intentionalClose || !this.room || !this.reconnectToken) return;
-    this.dispatchEvent(new CustomEvent('reconnecting'));
+    if (this.intentionalClose || !this.room || !this.reconnectToken) {
+      this.connectionState = 'idle';
+      return;
+    }
+    this.connectionState = 'reconnecting';
+    this.dispatchEvent(new CustomEvent('reconnecting', { detail: this.connectionInfo() }));
     if (!this.reconnectStartedAt) this.reconnectStartedAt = Date.now();
     this._scheduleReconnect();
   }
 
   _scheduleReconnect() {
     if (Date.now() - this.reconnectStartedAt >= RECONNECT_WINDOW_MS) {
-      this.dispatchEvent(new CustomEvent('connection-lost'));
+      this.connectionState = 'lost';
+      this.dispatchEvent(new CustomEvent('connection-lost', { detail: this.connectionInfo() }));
       return;
     }
     clearTimeout(this.reconnectTimer);
@@ -271,10 +331,89 @@ export class MultiplayerClient extends EventTarget {
           playerId: this.selfId,
           reconnectToken: this.reconnectToken,
         });
-        this.reconnectStartedAt = 0;
       } catch {
         this._scheduleReconnect();
       }
     }, 1200);
+  }
+
+  connectionInfo() {
+    return {
+      state: this.connectionState,
+      latencyMs: this.latencyMs,
+      jitterMs: this.jitterMs,
+      quality: this.networkQuality,
+    };
+  }
+
+  waitForRankResult({ raceId = this.room?.raceId ?? null, timeoutMs = 15000 } = {}) {
+    if (this.lastRankResult && (!raceId || this.lastRankResult.raceId === raceId)) {
+      return Promise.resolve(this.lastRankResult);
+    }
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.removeEventListener('rankResult', onResult);
+        reject(new Error('服务器结算超时'));
+      }, timeoutMs);
+      const onResult = (event) => {
+        if (raceId && event.detail?.raceId !== raceId) return;
+        clearTimeout(timeout);
+        this.removeEventListener('rankResult', onResult);
+        resolve(event.detail);
+      };
+      this.addEventListener('rankResult', onResult);
+    });
+  }
+
+  _isDuplicateSettlement(message) {
+    if (!message.settlementId) return false;
+    const key = `${message.type}:${message.settlementId}`;
+    if (this.seenSettlements.has(key)) return true;
+    this.seenSettlements.add(key);
+    if (this.seenSettlements.size > 16) this.seenSettlements.delete(this.seenSettlements.values().next().value);
+    return false;
+  }
+
+  _startProbes() {
+    this._stopProbes();
+    this._sendProbe();
+    this.probeTimer = setInterval(() => this._sendProbe(), PROBE_INTERVAL_MS);
+    this.probeTimer?.unref?.();
+  }
+
+  _stopProbes() {
+    clearInterval(this.probeTimer);
+    this.probeTimer = null;
+    this.probes.clear();
+  }
+
+  _sendProbe() {
+    if (!this.connected) return;
+    const nonce = ++this.probeNonce;
+    const clientTime = Date.now();
+    this.probes.set(nonce, clientTime);
+    while (this.probes.size > 3) this.probes.delete(this.probes.keys().next().value);
+    this.send('ping', { nonce, clientTime });
+  }
+
+  _recordPong(message) {
+    const sentAt = this.probes.get(message.nonce) ?? Number(message.clientTime);
+    if (!Number.isFinite(sentAt)) return;
+    this.probes.delete(message.nonce);
+    const receivedAt = Date.now();
+    const sample = Math.max(0, receivedAt - sentAt);
+    const previous = this.latencyMs;
+    this.latencyMs = previous === null ? sample : Math.round(previous * 0.72 + sample * 0.28);
+    const deviation = previous === null ? 0 : Math.abs(sample - previous);
+    this.jitterMs = this.jitterMs === null ? deviation : Math.round(this.jitterMs * 0.7 + deviation * 0.3);
+    this._syncServerClock(message.serverTime, sentAt, receivedAt);
+    this.dispatchEvent(new CustomEvent('connection-quality', { detail: this.connectionInfo() }));
+  }
+
+  _syncServerClock(serverTime, sentAt = Date.now(), receivedAt = Date.now()) {
+    const server = Number(serverTime);
+    if (!Number.isFinite(server)) return;
+    const sample = server - (sentAt + receivedAt) / 2;
+    this.clockOffsetMs = Math.round(this.clockOffsetMs * 0.75 + sample * 0.25);
   }
 }

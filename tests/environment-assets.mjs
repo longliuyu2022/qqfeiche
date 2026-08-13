@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import * as THREE from 'three';
 import {
   ENVIRONMENT_ASSETS,
+  ENVIRONMENT_STREAM_BUDGETS,
   attachEnvironmentHLOD,
   environmentAssetUrl,
   loadEnvironmentLODGracefully,
@@ -18,6 +19,7 @@ const EXPECTED_KINDS = Object.freeze([
 ]);
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 22 * 1024 * 1024;
+const LIGHTMAP_ROOT = new URL('../public/assets/environment/lightmaps/', import.meta.url);
 
 assert.deepEqual(Object.keys(ENVIRONMENT_ASSETS), EXPECTED_KINDS);
 
@@ -51,6 +53,21 @@ for (const kind of EXPECTED_KINDS) {
     assert.equal(data.toString('ascii', 0, 4), 'glTF', `${definition[level]} must be a GLB`);
     assert.equal(data.readUInt32LE(4), 2, `${definition[level]} must use GLB version 2`);
     assert.equal(data.readUInt32LE(8), data.byteLength, `${definition[level]} has an invalid GLB length`);
+    assert.equal(definition.bytes[level], data.byteLength, `${kind}.${level} byte manifest must stay current`);
+    const jsonLength = data.readUInt32LE(12);
+    const gltf = JSON.parse(data.subarray(20, 20 + jsonLength).toString('utf8').trim());
+    for (const mesh of gltf.meshes ?? []) {
+      for (const primitive of mesh.primitives ?? []) {
+        assert.equal(typeof primitive.attributes?.TEXCOORD_1, 'number', `${kind}.${level} must include TEXCOORD_1`);
+      }
+    }
+    assert.match(definition.lightMaps[level], new RegExp(`/assets/environment/lightmaps/${kind}/${kind}-${level}\\.png$`));
+    const lightMapFile = new URL(`${kind}/${kind}-${level}.png`, LIGHTMAP_ROOT);
+    assert.ok(fs.existsSync(lightMapFile), `${kind}.${level} lightmap must exist`);
+    const lightMapData = fs.readFileSync(lightMapFile);
+    assert.equal(lightMapData.readUInt32BE(0), 0x89504e47, `${kind}.${level} lightmap must be PNG`);
+    assert.equal(definition.lightMapBytes[level], lightMapData.byteLength, `${kind}.${level} lightmap byte manifest must stay current`);
+    assert.ok(lightMapData.byteLength < 16 * 1024, `${kind}.${level} lightmap must remain stream-friendly`);
     sizes.push(data.byteLength);
     totalBytes += data.byteLength;
     assetCount += 1;
@@ -59,6 +76,12 @@ for (const kind of EXPECTED_KINDS) {
 }
 assert.equal(assetCount, 15, 'five assets must publish near/mid/far GLBs');
 assert.ok(totalBytes <= MAX_TOTAL_BYTES, `environment GLBs exceed 22 MiB (${totalBytes} bytes)`);
+assert.equal(ENVIRONMENT_STREAM_BUDGETS.totalBytes, MAX_TOTAL_BYTES);
+assert.ok(
+  EXPECTED_KINDS.reduce((sum, kind) => sum + ENVIRONMENT_ASSETS[kind].bytes.far, 0)
+    <= ENVIRONMENT_STREAM_BUDGETS.initialBytes,
+  'one cached far model per asset kind must remain inside the initial stream budget',
+);
 assert.equal(environmentAssetUrl('unknown'), null);
 
 // With no browser globals, authored assets must remain optional. This keeps

@@ -54,6 +54,8 @@ export function describeRank(state) {
     points: normalized.points,
     wins: normalized.wins,
     races: normalized.races,
+    bestTierReached: normalized.bestTierReached,
+    updatedAt: normalized.updatedAt,
     tierId: tier.id,
     tierLabel: tier.label,
     divisionLabel: tier.divisionLabel,

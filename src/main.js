@@ -46,6 +46,7 @@ import {
   formatRank,
   getRankTier,
   loadRankState,
+  rankStateFromServer,
   saveRankState,
 } from './ranked.js';
 
@@ -84,6 +85,10 @@ function resolveQualityTier(detectedTier) {
   return preferences.quality === 'auto' ? detectedTier : preferences.quality;
 }
 
+// Software/WebGL fallback devices can spend minutes compiling every unique
+// Standard/Physical lighting permutation before the first frame. Balanced is
+// intentionally a visual fallback tier: keep authored textures and colors,
+// but use one cheap unlit shader family so the track becomes interactive first.
 const canvas = document.querySelector('#game');
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -103,6 +108,14 @@ let qualityTier = resolveQualityTier(detectedQualityTier);
 renderer.shadowMap.enabled = qualityTier !== 'balanced';
 renderer.shadowMap.type = qualityTier === 'ultra' ? THREE.VSMShadowMap : THREE.PCFSoftShadowMap;
 renderer.shadowMap.autoUpdate = true;
+renderer.setClearColor(0x05080b, 1);
+renderer.setSize(window.innerWidth, window.innerHeight, false);
+renderer.clear();
+// Commit the loading UI and a deterministic dark canvas before synchronous
+// world construction or shader compilation can occupy the main thread. Two
+// frames are required: a single rAF resumes its promise before that frame is
+// painted, whereas the second callback guarantees one composited frame.
+await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
 const [gtaoModule, smaaModule] = qualityTier === 'balanced'
   ? [{ GTAOPass: null }, { SMAAPass: null }]
@@ -138,13 +151,13 @@ if (activeTrack.environmentAsset) {
   );
 }
 const camera = new THREE.PerspectiveCamera(57, 1, 0.1, 1900);
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
+const composer = qualityTier === 'balanced' ? null : new EffectComposer(renderer);
+composer?.addPass(new RenderPass(scene, camera));
 // GTAO supplies the grounded contact shading that flat forward lighting cannot
 // provide. It is kept off on balanced devices because its depth/normal buffer
 // costs more than the mobile preset can afford.
 const gtao = qualityTier === 'balanced' ? null : new GTAOPass(scene, camera, 1, 1);
-if (gtao) {
+if (gtao && composer) {
   gtao.output = GTAOPass.OUTPUT.Denoise;
   gtao.blendIntensity = qualityTier === 'ultra' ? 1.28 : 1.05;
   gtao.updateGtaoMaterial({
@@ -162,12 +175,17 @@ const bloom = new UnrealBloomPass(
   activeTrack.bloomRadius,
   activeTrack.bloomThreshold,
 );
-composer.addPass(bloom);
+composer?.addPass(bloom);
 const speedPost = createSpeedPostProcess({ qualityTier });
-composer.addPass(speedPost.pass);
+composer?.addPass(speedPost.pass);
 const smaa = qualityTier === 'balanced' ? null : new SMAAPass();
-if (smaa) composer.addPass(smaa);
-composer.addPass(new OutputPass());
+if (smaa && composer) composer.addPass(smaa);
+composer?.addPass(new OutputPass());
+
+function renderFrame() {
+  if (composer) composer.render();
+  else renderer.render(scene, camera);
+}
 
 const trackFeatures = computeTrackFeatures(trackCurve, { trackId: activeTrackId, roadWidth: 16 });
 const featureZones = featureZonesForPhysics(trackFeatures);
@@ -180,17 +198,9 @@ const featureMeshes = buildTrackFeatureMeshes(trackFeatures, { theme: activeTrac
 scene.add(featureMeshes);
 const selectedCar = getCarById(preferences.carId);
 const ownedCar = isOwned(loadWallet(), selectedCar.id) ? selectedCar : getCarById(DEFAULT_CAR_ID);
-const hero = ownedCar.id === DEFAULT_CAR_ID
-  ? await createDetailedHeroCar({
-    maxAnisotropy: renderer.capabilities.getMaxAnisotropy(),
-    onError: (error, url) => runtimeMonitor.assetFailure(url, error),
-    onProgress: (event) => {
-      if (!event.total) return;
-      const label = document.querySelector('.loading-screen small');
-      if (label) label.textContent = `${activeTrack.loading} ${Math.round((event.loaded / event.total) * 100)}%`;
-    },
-  })
-  : createHeroCarVariant(ownedCar);
+// The detailed 12 MB car must never block the first rendered frame. Start with
+// the matching procedural car and upgrade it after the game is interactive.
+let hero = createHeroCarVariant(ownedCar);
 scene.add(hero);
 
 const vehicle = new ArcadeVehicle(applyCarPhysics({
@@ -319,6 +329,7 @@ let ghostData = null;
 let rankState = loadRankState();
 let wallet = loadWallet();
 let achievementState = loadAchievementState();
+
 // Per-race tallies feeding the achievement checks at the finish line.
 const raceTally = {
   maxBoostChain: 0,
@@ -1146,6 +1157,7 @@ const achievementsUi = createAchievementsUi({ getState: () => achievementState }
 let mountedWheels = null;
 let mountedSpoiler = null;
 let hornPlayer = null;
+let detailedHeroLoading = false;
 
 /**
  * Local-space bounds of the hero body, measured with the car's race transform
@@ -1204,6 +1216,32 @@ function applyEquippedGear(currentWallet = wallet) {
       fitSpoilerToCar(hero.children.find((child) => child.name === 'ShopSpoiler'));
     }
   }
+}
+
+function loadDetailedHeroInBackground() {
+  if (ownedCar.id !== DEFAULT_CAR_ID || detailedHeroLoading || hero.userData.detailed) return;
+  detailedHeroLoading = true;
+  createDetailedHeroCar({
+    maxAnisotropy: renderer.capabilities.getMaxAnisotropy(),
+    onError: (error, url) => runtimeMonitor.assetFailure(url, error),
+  }).then((detailed) => {
+    if (!detailed?.userData?.detailed || raceStarted || !homeVisible || isOnline) return;
+    mountedWheels?.dispose();
+    mountedSpoiler?.dispose();
+    mountedWheels = null;
+    mountedSpoiler = null;
+    detailed.position.copy(hero.position);
+    detailed.quaternion.copy(hero.quaternion);
+    detailed.visible = hero.visible;
+    scene.remove(hero);
+    hero = detailed;
+    vehicle.object = hero;
+    scene.add(hero);
+    applyEquippedPaint(hero, wallet);
+    applyEquippedGear(wallet);
+  }).finally(() => {
+    detailedHeroLoading = false;
+  });
 }
 
 function soundHorn() {
@@ -1732,7 +1770,7 @@ itemRace.on('strike', ({ blocked }) => {
   showCallout(blocked ? '对手护盾抵消' : '命中对手！', 1);
 });
 itemRace.on('explosion', () => haptic(18));
-raceSystem.on('finish', (result) => {
+raceSystem.on('finish', async (result) => {
   const mode = RACE_MODES[activeMode];
   const onlineStandings = isOnline ? getOnlineStandings() : null;
   const onlinePosition = onlineStandings?.find((entry) => entry.isPlayer)?.position;
@@ -1753,7 +1791,7 @@ raceSystem.on('finish', (result) => {
     }
   }
   let rankOutcome = null;
-  if (activeMode === 'race') {
+  if (activeMode === 'race' && !isOnline) {
     rankOutcome = applyRankResult(rankState, {
       position: modeResult.position,
       totalRacers: modeResult.entrants,
@@ -1761,6 +1799,31 @@ raceSystem.on('finish', (result) => {
     rankState = rankOutcome.state;
     saveRankState(rankState);
     renderRankBadge();
+  }
+  if (activeMode === 'race' && isOnline) {
+    showCallout('等待服务器权威结算', 2.4);
+    try {
+      const authoritative = await onlineSession.waitForRankResult({ timeoutMs: 90000 });
+      const synchronized = rankStateFromServer(authoritative.rank, rankState);
+      if (synchronized) {
+        rankState = synchronized;
+        saveRankState(rankState);
+        renderRankBadge();
+      }
+      rankOutcome = {
+        label: formatRank(rankState),
+        delta: Number(authoritative.delta) || 0,
+        promoted: Boolean(authoritative.promoted),
+        demoted: Boolean(authoritative.demoted),
+        authoritative: true,
+        settlementId: authoritative.settlementId,
+      };
+      modeResult.position = Number(authoritative.position) || modeResult.position;
+      modeResult.entrants = Number(authoritative.totalRacers) || modeResult.entrants;
+    } catch (error) {
+      runtimeMonitor.assetFailure('online:rank-settlement', error);
+      showCallout('服务器结算延迟，可稍后重连同步', 2.8);
+    }
   }
   if (activeMode === 'race' || activeMode === 'items') {
     if (modeResult.position === 1 && modeResult.entrants > 1) announce('finish_first');
@@ -1917,8 +1980,8 @@ function resize() {
   const ratio = Math.min(window.devicePixelRatio, mobile ? Math.min(1.25, tierLimit) : tierLimit);
   renderer.setPixelRatio(ratio);
   renderer.setSize(width, height, false);
-  composer.setPixelRatio(ratio);
-  composer.setSize(width, height);
+  composer?.setPixelRatio(ratio);
+  composer?.setSize(width, height);
   speedPost.resize(width, height);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
@@ -1965,7 +2028,7 @@ function animate() {
     lastDrifting = vehicle.drifting;
     lastBoosting = vehicle.boosting;
   }
-  composer.render();
+  renderFrame();
 
   if (startDelay > 0.25 && !window.__NEON_APEX_READY__) {
     window.__NEON_APEX_READY__ = true;
@@ -2016,7 +2079,7 @@ function animate() {
         cameraTarget.copy(lookTarget);
         camera.lookAt(cameraTarget);
         updateUi();
-        composer.render();
+        renderFrame();
         capturePaused = true;
         return canvas.toDataURL('image/png');
       },
@@ -2065,7 +2128,7 @@ function animate() {
         cameraTarget.copy(lookTarget);
         camera.lookAt(cameraTarget);
         updateUi();
-        composer.render();
+        renderFrame();
         capturePaused = true;
         return vehicle.getSnapshot();
       },
@@ -2085,6 +2148,12 @@ function animate() {
       onlineSession.markReady();
     } else {
       ui.loading.classList.add('done');
+      const scheduleDetailedCar = () => loadDetailedHeroInBackground();
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(scheduleDetailedCar, { timeout: 4000 });
+      } else {
+        setTimeout(scheduleDetailedCar, 1200);
+      }
     }
   }
 }

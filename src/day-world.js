@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { attachEnvironmentHLOD } from './environment-assets.js';
+import { attachMapArtLayout, curveArtFrame } from './map-art-layouts.js';
 import {
   CLEARANCE_EXEMPT,
   PROP_CLEARANCE,
@@ -24,39 +24,13 @@ const textureLoader = new THREE.TextureLoader();
 const dayTexturePromises = new Map();
 
 function createDayEnvironmentHLOD(root, qualityTier, clearance, options) {
-  const placements = [];
-  const addTrackside = (kind, progress, direction, radius, distance, scale, yOffset = 0, rotationOffset = 0) => {
-    const point = DAY_TRACK_CURVE.getPointAt(progress);
-    const tangent = DAY_TRACK_CURVE.getTangentAt(progress).normalize();
-    const side = new THREE.Vector3().crossVectors(UP, tangent).setY(0).normalize();
-    const outward = direction ?? clearance.outwardSign(point, side);
-    const candidate = clearance.place((attempt) => ({
-      x: point.x + side.x * outward * (clearance.requiredDistance(radius, TERRAIN_CLEARANCE) + distance + attempt * 24),
-      z: point.z + side.z * outward * (clearance.requiredDistance(radius, TERRAIN_CLEARANCE) + distance + attempt * 24),
-      radius,
-      clearance: TERRAIN_CLEARANCE,
-    }), 5);
-    if (!candidate) return;
-    placements.push({
-      kind,
-      position: [candidate.x, point.y + yOffset, candidate.z],
-      rotation: [0, Math.atan2(-tangent.z, tangent.x) + rotationOffset, 0],
-      scale,
-      anchor: progress,
-    });
-  };
-
-  // Authored terrain breaks up the procedural horizon; fir clusters replace
-  // the most noticeable cone-tree silhouettes near the racing line.
-  addTrackside('mountainside', 0.23, null, 65, 44, [11, 11, 11], -4);
-  addTrackside('mountainside', 0.69, null, 56, 58, [9, 9, 9], -3, Math.PI);
-  addTrackside('fir', 0.12, -1, 18, 12, [7, 7, 7], -1.2, 0.4);
-  addTrackside('fir', 0.49, 1, 16, 15, [6.2, 6.2, 6.2], -1.1, -0.8);
-  addTrackside('fir', 0.84, -1, 15, 18, [5.8, 5.8, 5.8], -1.1, 1.7);
-  return attachEnvironmentHLOD(root, qualityTier, placements, {
+  return attachMapArtLayout(root, 'day', qualityTier, clearance, (progress) => (
+    curveArtFrame(DAY_TRACK_CURVE, progress)
+  ), {
     name: 'SunvaleEnvironmentHLOD',
     bakedLighting: true,
     onError: options.onEnvironmentAssetError,
+    attemptStep: 24,
   });
 }
 

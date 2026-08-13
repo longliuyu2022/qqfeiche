@@ -246,6 +246,9 @@ try {
   const status = await alphaStatus;
   assert.equal(status.players, 2);
   assert.equal(status.state, 'ready');
+  assert.equal(typeof status.serverTime, 'number');
+  assert.equal(typeof status.queuedForMs, 'number');
+  assert.equal(typeof status.searchRange, 'number');
 
   const alphaPrepare = waitForMessage(alpha, 'prepare', 5000);
   const betaPrepare = waitForMessage(beta, 'prepare', 5000);
@@ -256,26 +259,47 @@ try {
   sendJson(alpha, { type: 'ready' });
   sendJson(beta, { type: 'ready' });
   const [raceStart] = await Promise.all([alphaStart, betaStart]);
+  assert.match(raceStart.raceId, /^[0-9a-f-]{36}$/);
   summary.match = { room: alphaJoined.room.code, map: raceStart.map, players: 2 };
 
   // ② 赛后按名次结算
-  const alphaResultPromise = waitForMessage(alpha, 'rankResult', 60000);
   const betaResultPromise = waitForMessage(beta, 'rankResult', 60000);
-  const standingsPromise = waitForMessage(alpha, 'race-result', 60000);
+  const standingsPromise = waitForMessage(beta, 'race-result', 60000);
   process.stderr.write(`[ranked-online] 正在跑完整 3 圈联机排位（约 ${Math.round(minimumFinishTimeMs(MAP) / 1000)} 秒）…\n`);
-  await Promise.all([
-    driveRace({ socket: alpha, startAt: raceStart.startAt, pace: 0.97 }),
-    driveRace({ socket: beta, startAt: raceStart.startAt, pace: 0.9 }),
-  ]);
-  const [alphaResult, betaResult, standings] = await Promise.all([
-    alphaResultPromise, betaResultPromise, standingsPromise,
-  ]);
+  const alphaFinished = waitForMessage(alpha, 'race-finish', 60000, (message) => message.playerId === alphaJoined.selfId);
+  const betaDrive = driveRace({ socket: beta, startAt: raceStart.startAt, pace: 0.9 });
+  await driveRace({ socket: alpha, startAt: raceStart.startAt, pace: 0.97 });
+  const alphaFinish = await alphaFinished;
+  assert.equal(alphaFinish.raceId, raceStart.raceId);
+  assert.equal(alphaFinish.position, 1);
+  alpha.close();
+  await once(alpha, 'close');
+  await betaDrive;
+  const [betaResult, standings] = await Promise.all([betaResultPromise, standingsPromise]);
+
+  // The winner dropped after finishing but before the race settled. Resume must
+  // replay the immutable authoritative settlement without applying it again.
+  const alphaResumedSocket = await connect();
+  const resumedPromise = waitForMessage(alphaResumedSocket, 'resumed');
+  const alphaResultPromise = waitForMessage(alphaResumedSocket, 'rankResult');
+  const replayedStandingsPromise = waitForMessage(alphaResumedSocket, 'race-result');
+  sendJson(alphaResumedSocket, {
+    type: 'resume',
+    code: alphaJoined.room.code,
+    playerId: alphaJoined.selfId,
+    reconnectToken: alphaJoined.reconnectToken,
+  });
+  await resumedPromise;
+  const [alphaResult, replayedStandings] = await Promise.all([alphaResultPromise, replayedStandingsPromise]);
 
   assert.equal(standings.ranked, true);
   assert.equal(standings.reason, 'completed');
   assert.equal(standings.totalRacers, 2);
   assert.equal(standings.standings[0].name, 'Alpha');
   assert.equal(standings.standings[1].name, 'Beta');
+  assert.equal(standings.authoritative, true);
+  assert.equal(standings.raceId, raceStart.raceId);
+  assert.equal(replayedStandings.settlementId, standings.settlementId);
 
   assert.equal(alphaResult.settled, true);
   assert.equal(alphaResult.position, 1);
@@ -285,6 +309,8 @@ try {
   assert.equal(alphaResult.rank.division, expectedWinner.state.division);
   assert.equal(alphaResult.rank.label, expectedWinner.label);
   assert.equal(alphaResult.promoted, expectedWinner.promoted);
+  assert.equal(alphaResult.authoritative, true);
+  assert.equal(alphaResult.settlementId, standings.settlementId);
 
   assert.equal(betaResult.settled, true);
   assert.equal(betaResult.position, 2);
@@ -297,9 +323,10 @@ try {
   summary.settlement = {
     winner: { delta: alphaResult.delta, points: alphaResult.rank.points },
     loser: { delta: betaResult.delta, points: betaResult.rank.points },
+    resumed: alphaResult.settlementId,
   };
 
-  alpha.close();
+  alphaResumedSocket.close();
   beta.close();
   cheater.close();
   quitter.close();

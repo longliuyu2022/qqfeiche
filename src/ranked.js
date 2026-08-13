@@ -89,6 +89,25 @@ export function normalizeRankState(value = {}) {
   };
 }
 
+// Converts the public rank snapshot returned by the multiplayer server back
+// into the local persistence shape. Older servers omit bestTierReached and
+// updatedAt, so retain those continuity fields from the last local snapshot.
+export function rankStateFromServer(rank, fallback = createDefaultRankState()) {
+  if (!rank || typeof rank !== 'object') return null;
+  const base = normalizeRankState(fallback);
+  const tier = clampInt(rank.tier, 0, LEGEND_TIER, base.tier);
+  return normalizeRankState({
+    ...base,
+    tier,
+    division: rank.division,
+    points: rank.points,
+    wins: rank.wins,
+    races: rank.races,
+    bestTierReached: rank.bestTierReached ?? Math.max(base.bestTierReached, tier),
+    updatedAt: rank.updatedAt ?? base.updatedAt,
+  });
+}
+
 export function applyRaceResult(state, result = {}, now) {
   const base = normalizeRankState(state);
   const totalRacers = clampInt(result?.totalRacers, 1, Number.MAX_SAFE_INTEGER, 6);

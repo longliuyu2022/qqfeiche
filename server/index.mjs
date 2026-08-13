@@ -9,7 +9,7 @@ import {
 const HOST = process.env.NEON_APEX_HOST || '127.0.0.1';
 const PORT = Number(process.env.NEON_APEX_PORT || 3010);
 const MAX_PLAYERS = 6;
-const RECONNECT_MS = 20000;
+const RECONNECT_MS = envInteger('NEON_APEX_RECONNECT_MS', 20000, 1000, 120000);
 const ROOM_IDLE_MS = 30 * 60 * 1000;
 const START_DELAY_MS = envInteger('NEON_APEX_START_DELAY_MS', 3500, 0, 10000);
 const MAX_ROOMS = envInteger('NEON_APEX_MAX_ROOMS', 512, 1, 10000);
@@ -108,6 +108,7 @@ function generateRoomCode() {
 }
 
 function serializeRoom(room) {
+  const connected = connectedPlayers(room);
   return {
     code: room.code,
     map: room.map,
@@ -118,6 +119,9 @@ function serializeRoom(room) {
     minPlayers: room.mode === 'ranked' ? RANKED_MIN_PLAYERS : 2,
     maxPlayers: MAX_PLAYERS,
     autoStartAt: room.autoStartAt ?? null,
+    raceId: room.raceId ?? null,
+    connectedCount: connected.length,
+    readyCount: connected.filter((player) => player.ready).length,
     players: [...room.players.values()].map((player) => ({
       id: player.id,
       name: player.name,
@@ -200,6 +204,9 @@ function createRoom({ map, mode = 'friendly', bucket = 0 }) {
     finishCount: 0,
     settled: false,
     raceDeadline: null,
+    raceId: null,
+    raceResult: null,
+    rankResults: null,
   };
   rooms.set(code, room);
   return room;
@@ -267,7 +274,15 @@ function onResume(socket, message) {
   send(socket, {
     type: 'resumed', selfId: player.id, reconnectToken: player.reconnectToken, room: serializeRoom(room),
   });
-  if (room.phase === 'racing') send(socket, { type: 'race-start', startAt: room.startAt, map: room.map });
+  if (room.phase === 'racing') {
+    send(socket, { type: 'race-start', raceId: room.raceId, startAt: room.startAt, map: room.map });
+  } else if (room.phase === 'finished' && room.raceResult) {
+    // A finisher may lose the socket while the remaining grid is still racing.
+    // Replay the immutable settlement after resume; clients dedupe by settlementId.
+    send(socket, room.raceResult);
+    const rankResult = room.rankResults?.get(player.id);
+    if (rankResult) send(socket, rankResult);
+  }
   broadcastRoom(room);
 }
 
@@ -290,6 +305,7 @@ function connectedPlayers(room) {
 
 function matchStatus(room) {
   const waiting = connectedPlayers(room).length;
+  const now = Date.now();
   return {
     type: 'match-status',
     code: room.code,
@@ -300,6 +316,9 @@ function matchStatus(room) {
     capacity: MAX_PLAYERS,
     state: waiting >= RANKED_MIN_PLAYERS ? 'ready' : 'waiting',
     startsAt: room.autoStartAt ?? null,
+    serverTime: now,
+    queuedForMs: Math.max(0, now - room.createdAt),
+    searchRange: bucketTolerance(room, now),
   };
 }
 
@@ -425,6 +444,9 @@ function onReady(socket) {
   if (connected.length < 2 || !connected.every((player) => player.ready)) return;
   context.room.phase = 'racing';
   context.room.startAt = Date.now() + START_DELAY_MS;
+  context.room.raceId = randomUUID();
+  context.room.raceResult = null;
+  context.room.rankResults = null;
   context.room.raceDeadline = context.room.startAt + RANKED_RACE_TIMEOUT_MS;
   // Freeze the grid: settlement scores against the roster that took the start,
   // even if somebody rage-quits halfway through.
@@ -439,7 +461,9 @@ function onReady(socket) {
   context.room.finishCount = 0;
   context.room.settled = false;
   broadcastRoom(context.room);
-  broadcast(context.room, { type: 'race-start', startAt: context.room.startAt, map: context.room.map });
+  broadcast(context.room, {
+    type: 'race-start', raceId: context.room.raceId, startAt: context.room.startAt, map: context.room.map,
+  });
 }
 
 function onState(socket, message) {
@@ -484,6 +508,7 @@ function recordFinish(room, player) {
   entry.finishTime = player.state.finishTime;
   broadcast(room, {
     type: 'race-finish',
+    raceId: room.raceId,
     playerId: player.id,
     name: player.name,
     position: entry.finishRank,
@@ -510,6 +535,8 @@ function settleRace(room, reason) {
   room.settled = true;
   room.phase = 'finished';
   room.autoStartAt = null;
+  const settledAt = Date.now();
+  const settlementId = `${room.raceId || room.code}:${settledAt}`;
   const entries = [...room.roster.values()].sort((a, b) => {
     if (Boolean(a.finishRank) !== Boolean(b.finishRank)) return a.finishRank ? -1 : 1;
     return a.finishRank - b.finishRank;
@@ -547,12 +574,35 @@ function settleRace(room, reason) {
     outcomes.set(entry.id, row);
   });
   const result = {
-    type: 'race-result', reason, ranked: room.mode === 'ranked', totalRacers, standings,
+    type: 'race-result',
+    raceId: room.raceId,
+    settlementId,
+    settledAt,
+    authoritative: true,
+    reason,
+    ranked: room.mode === 'ranked',
+    totalRacers,
+    standings,
   };
+  room.raceResult = result;
+  room.rankResults = new Map();
   for (const player of room.players.values()) {
     send(player.socket, result);
     const row = outcomes.get(player.id);
-    if (row) send(player.socket, { type: 'rankResult', ...row, totalRacers, reasonCode: row.reason });
+    if (row) {
+      const rankResult = {
+        type: 'rankResult',
+        raceId: room.raceId,
+        settlementId,
+        settledAt,
+        authoritative: true,
+        ...row,
+        totalRacers,
+        reasonCode: row.reason,
+      };
+      room.rankResults.set(player.id, rankResult);
+      send(player.socket, rankResult);
+    }
   }
   broadcastRoom(room);
 }
@@ -581,6 +631,11 @@ function onMessage(socket, raw) {
   else if (message.type === 'start') onStart(socket);
   else if (message.type === 'ready') onReady(socket);
   else if (message.type === 'state') onState(socket, message);
+  else if (message.type === 'ping') {
+    send(socket, {
+      type: 'pong', nonce: message.nonce, clientTime: message.clientTime, serverTime: Date.now(),
+    });
+  }
   else if (message.type === 'leave') {
     const context = socketPlayer(socket);
     if (context) removePlayer(context.room, context.player.id);

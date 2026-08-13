@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { attachEnvironmentHLOD } from './environment-assets.js';
+import { attachMapArtLayout, curveArtFrame } from './map-art-layouts.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const FORWARD = new THREE.Vector3(0, 0, 1);
@@ -836,48 +836,9 @@ function createRockFormations(root, curve, theme, random, qualityTier, kind, cle
 }
 
 function createScenicEnvironmentHLOD(root, trackId, qualityTier, curve, clearance, options) {
-  const placements = [];
-  const addTrackside = (assetKind, progress, direction, radius, distance, scale, yOffset = 0, rotationOffset = 0) => {
-    const point = new THREE.Vector3();
-    const tangent = new THREE.Vector3();
-    const side = new THREE.Vector3();
-    trackFrame(curve, progress, point, tangent, side);
-    const outward = direction ?? clearance.outwardSign(point, side);
-    const candidate = clearance.place((attempt) => {
-      const offset = clearance.requiredDistance(radius, assetKind === 'mountainside' ? TERRAIN_CLEARANCE : PROP_CLEARANCE)
-        + distance + attempt * 22;
-      return {
-        x: point.x + side.x * outward * offset,
-        z: point.z + side.z * outward * offset,
-        radius,
-        clearance: assetKind === 'mountainside' ? TERRAIN_CLEARANCE : PROP_CLEARANCE,
-      };
-    }, 5);
-    if (!candidate) return;
-    placements.push({
-      kind: assetKind,
-      position: [candidate.x, point.y + yOffset, candidate.z],
-      rotation: [0, Math.atan2(-tangent.z, tangent.x) + rotationOffset, 0],
-      scale,
-      anchor: progress,
-    });
-  };
-
-  if (trackId === 'alpine') {
-    addTrackside('mountainside', 0.18, null, 78, 42, [12, 12, 12], -7);
-    addTrackside('mountainside', 0.63, null, 65, 55, [10, 10, 10], -6, Math.PI);
-    addTrackside('fir', 0.36, 1, 15, 12, [6, 6, 6], -3);
-    addTrackside('fir', 0.82, -1, 15, 18, [6.5, 6.5, 6.5], -3, 1.4);
-  } else if (trackId === 'canyon') {
-    addTrackside('mountainside', 0.29, null, 72, 58, [11, 11, 11], -10, 0.6);
-    addTrackside('boulder', 0.54, null, 8, 12, [8, 8, 8], -5, 0.3);
-    addTrackside('boulder', 0.88, null, 5, 16, [6, 6, 6], -4, 1.2);
-  } else {
-    addTrackside('boulder', 0.21, null, 5, 14, [7, 7, 7], -4, 0.7);
-    addTrackside('boulder', 0.68, null, 5, 18, [6.5, 6.5, 6.5], -4, 2.1);
-    addTrackside('fir', 0.44, -1, 14, 16, [6, 6, 6], -4, 0.4);
-  }
-  return attachEnvironmentHLOD(root, qualityTier, placements, {
+  return attachMapArtLayout(root, trackId, qualityTier, clearance, (progress) => (
+    curveArtFrame(curve, progress)
+  ), {
     name: `${trackId}EnvironmentHLOD`,
     bakedLighting: true,
     onError: options.onEnvironmentAssetError,

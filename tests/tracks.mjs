@@ -9,12 +9,34 @@ import {
   CANYON_TRACK_CURVE,
   COAST_TRACK_CURVE,
   SCENIC_TRACK_CURVES,
+  createClearanceField,
   createScenicWorld,
 } from '../src/scenic-worlds.js';
 import { TRACK_CATALOG, normalizeTrackId } from '../src/track-catalog.js';
+import {
+  MAP_ART_LAYOUTS,
+  buildMapArtPlacements,
+  curveArtFrame,
+} from '../src/map-art-layouts.js';
 
 const expectedTrackIds = ['night', 'day', 'alpine', 'canyon', 'coast'];
 assert.deepEqual(Object.keys(TRACK_CATALOG), expectedTrackIds);
+assert.deepEqual(Object.keys(MAP_ART_LAYOUTS), expectedTrackIds);
+const environmentKinds = new Set(['mountainside', 'boulder', 'apartment', 'factory', 'fir']);
+for (const [trackId, layout] of Object.entries(MAP_ART_LAYOUTS)) {
+  assert.equal(layout.length, 10, `${trackId} should have ten authored HLOD placements`);
+  assert.equal(new Set(layout.map(({ id }) => id)).size, layout.length, `${trackId} placement IDs must be unique`);
+  assert.ok(new Set(layout.map(({ sector }) => sector)).size >= 5, `${trackId} art must cover at least five race sectors`);
+  assert.ok(
+    layout.filter(({ landmarkTier }) => landmarkTier !== 'supporting').length >= 3,
+    `${trackId} should feature at least three named landmarks`,
+  );
+  for (const entry of layout) {
+    assert.ok(environmentKinds.has(entry.kind), `${trackId}.${entry.id} uses an unknown environment asset`);
+    assert.ok(entry.progress >= 0 && entry.progress < 1, `${trackId}.${entry.id} has invalid track progress`);
+    assert.ok(entry.name.length > 3 && entry.sector.length > 2, `${trackId}.${entry.id} needs art metadata`);
+  }
+}
 for (const track of Object.values(TRACK_CATALOG)) {
   assert.ok(track.environmentAsset, `${track.id} should define an HDR environment`);
   assert.ok(
@@ -34,6 +56,21 @@ const curves = {
   coast: COAST_TRACK_CURVE,
 };
 assert.deepEqual(Object.keys(SCENIC_TRACK_CURVES), ['alpine', 'canyon', 'coast']);
+for (const [trackId, curve] of Object.entries(curves)) {
+  const clearance = createClearanceField(curve);
+  const placements = buildMapArtPlacements(
+    trackId,
+    clearance,
+    (progress) => curveArtFrame(curve, progress),
+  );
+  assert.equal(placements.length, 10, `${trackId} should place every authored HLOD anchor`);
+  for (const placement of placements) {
+    const { x, z } = new THREE.Vector3().fromArray(placement.position);
+    const { radius, clearance: clearanceKind } = placement.anchor;
+    const margin = clearanceKind === 'terrain' ? 20 : 12;
+    assert.ok(clearance.clears(x, z, radius, margin), `${trackId}.${placement.anchor.id} must clear the circuit`);
+  }
+}
 
 function minimumTurnRadius(curve, sampleCount = 1600, sampleSpan = 3) {
   const sampleDistance = curve.getLength() / sampleCount;
@@ -90,6 +127,8 @@ assert.equal(dayWorld.world.name, 'SunvaleDayWorld');
 assert.equal(dayWorld.road.name, 'DayCircuitRoad');
 assert.ok(dayWorld.world.children.length > 10, 'day map should include scenery and landmarks');
 assert.ok(scene.background instanceof THREE.Color);
+assert.equal(dayWorld.world.userData.environmentArt.placementCount, 10);
+assert.ok(dayWorld.world.userData.environmentArt.landmarkCount >= 3);
 dayWorld.update(4);
 
 const expectedScenicWorlds = {
@@ -106,6 +145,8 @@ for (const [trackId, [worldName, roadName]] of Object.entries(expectedScenicWorl
   assert.ok(scenicWorld.world.children.length > 20, `${trackId} should include detailed scenery`);
   assert.ok(scenicScene.background instanceof THREE.Color);
   assert.ok(scenicScene.fog instanceof THREE.FogExp2);
+  assert.equal(scenicWorld.world.userData.environmentArt.placementCount, 10);
+  assert.ok(scenicWorld.world.userData.environmentArt.sectors.length >= 5);
   assert.equal(typeof scenicWorld.update, 'function');
   scenicWorld.update(4);
   assert.ok(scenicWorld.animated.clouds.rotation.y > 0);
