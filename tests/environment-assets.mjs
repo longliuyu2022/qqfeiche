@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import * as THREE from 'three';
+import { PNG } from 'pngjs';
 import {
   ENVIRONMENT_ASSETS,
   ENVIRONMENT_STREAM_BUDGETS,
@@ -24,6 +25,7 @@ const LIGHTMAP_ROOT = new URL('../public/assets/environment/lightmaps/', import.
 assert.deepEqual(Object.keys(ENVIRONMENT_ASSETS), EXPECTED_KINDS);
 
 let totalBytes = 0;
+let totalLightMapBytes = 0;
 let assetCount = 0;
 for (const kind of EXPECTED_KINDS) {
   const definition = ENVIRONMENT_ASSETS[kind];
@@ -56,9 +58,17 @@ for (const kind of EXPECTED_KINDS) {
     assert.equal(definition.bytes[level], data.byteLength, `${kind}.${level} byte manifest must stay current`);
     const jsonLength = data.readUInt32LE(12);
     const gltf = JSON.parse(data.subarray(20, 20 + jsonLength).toString('utf8').trim());
+    assert.equal(gltf.extras?.neonApexLightmap, 'atlas-irradiance-v2');
+    assert.equal(gltf.extras?.lightmapUv, 'TEXCOORD_1');
+    assert.equal(gltf.extras?.lightmapUvSource, 'dedicated-atlas-accessor');
     for (const mesh of gltf.meshes ?? []) {
       for (const primitive of mesh.primitives ?? []) {
         assert.equal(typeof primitive.attributes?.TEXCOORD_1, 'number', `${kind}.${level} must include TEXCOORD_1`);
+        assert.notEqual(primitive.attributes.TEXCOORD_1, primitive.attributes.TEXCOORD_0,
+          `${kind}.${level} UV2 must use an independent accessor`);
+        const uv2 = gltf.accessors[primitive.attributes.TEXCOORD_1];
+        assert.equal(uv2.componentType, 5121);
+        assert.equal(uv2.normalized, true);
       }
     }
     assert.match(definition.lightMaps[level], new RegExp(`/assets/environment/lightmaps/${kind}/${kind}-${level}\\.png$`));
@@ -68,6 +78,15 @@ for (const kind of EXPECTED_KINDS) {
     assert.equal(lightMapData.readUInt32BE(0), 0x89504e47, `${kind}.${level} lightmap must be PNG`);
     assert.equal(definition.lightMapBytes[level], lightMapData.byteLength, `${kind}.${level} lightmap byte manifest must stay current`);
     assert.ok(lightMapData.byteLength < 16 * 1024, `${kind}.${level} lightmap must remain stream-friendly`);
+    const lightMap = PNG.sync.read(lightMapData);
+    assert.equal(lightMap.width, 64);
+    assert.equal(lightMap.height, 64);
+    const luminance = new Set();
+    for (let index = 0; index < lightMap.data.length; index += 32) {
+      luminance.add(`${lightMap.data[index]}:${lightMap.data[index + 1]}:${lightMap.data[index + 2]}`);
+    }
+    assert.ok(luminance.size > 8, `${kind}.${level} lightmap must contain baked lighting variation`);
+    totalLightMapBytes += lightMapData.byteLength;
     sizes.push(data.byteLength);
     totalBytes += data.byteLength;
     assetCount += 1;
@@ -76,9 +95,12 @@ for (const kind of EXPECTED_KINDS) {
 }
 assert.equal(assetCount, 15, 'five assets must publish near/mid/far GLBs');
 assert.ok(totalBytes <= MAX_TOTAL_BYTES, `environment GLBs exceed 22 MiB (${totalBytes} bytes)`);
+assert.ok(totalBytes + totalLightMapBytes <= MAX_TOTAL_BYTES,
+  `environment GLBs and lightmaps exceed 22 MiB (${totalBytes + totalLightMapBytes} bytes)`);
 assert.equal(ENVIRONMENT_STREAM_BUDGETS.totalBytes, MAX_TOTAL_BYTES);
 assert.ok(
-  EXPECTED_KINDS.reduce((sum, kind) => sum + ENVIRONMENT_ASSETS[kind].bytes.far, 0)
+  EXPECTED_KINDS.reduce((sum, kind) => sum + ENVIRONMENT_ASSETS[kind].bytes.far
+    + ENVIRONMENT_ASSETS[kind].lightMapBytes.far, 0)
     <= ENVIRONMENT_STREAM_BUDGETS.initialBytes,
   'one cached far model per asset kind must remain inside the initial stream budget',
 );
@@ -185,6 +207,7 @@ else globalThis.window = previousWindow;
 console.log(JSON.stringify({
   assets: assetCount,
   totalBytes,
+  totalLightMapBytes,
   maxFileBytes: MAX_FILE_BYTES,
   mapsWithoutBalancedHLOD: worlds.map(([trackId]) => trackId),
 }));

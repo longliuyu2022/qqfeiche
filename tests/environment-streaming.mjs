@@ -49,6 +49,9 @@ const staged = streamEnvironmentLOD('boulder', {
     requested.push(level);
     return createTemplate();
   },
+  textureLoader: async () => new THREE.DataTexture(
+    new Uint8Array([180, 180, 180, 255]), 1, 1, THREE.RGBAFormat,
+  ),
   idleScheduler: () => {
     const gate = deferred();
     idleGates.push(gate);
@@ -61,8 +64,9 @@ assert.deepEqual(requested, ['far'], 'environmentReady must only require the che
 assert.deepEqual(staged.metrics.loadedLevels, ['far']);
 assert.equal(stagedLOD.levels.length, 1);
 assert.equal(stagedLOD.levels[0].object.userData.lodLevel, 'far');
-assert.equal(staged.metrics.bytesLoaded,
+assert.equal(staged.metrics.initialBytes,
   ENVIRONMENT_ASSETS.boulder.bytes.far + ENVIRONMENT_ASSETS.boulder.lightMapBytes.far);
+assert.ok(staged.metrics.bytesLoaded >= ENVIRONMENT_ASSETS.boulder.bytes.far);
 assert.equal(staged.metrics.state, 'ready');
 
 await waitUntil(() => idleGates.length === 1, 'mid upgrade must wait for its idle gate');
@@ -75,6 +79,9 @@ idleGates[1].resolve();
 await staged.environmentSettled;
 assert.deepEqual(requested, ['far', 'mid', 'near']);
 assert.deepEqual(staged.metrics.loadedLevels, ['far', 'mid', 'near']);
+assert.equal(staged.metrics.bytesLoaded, Object.values(ENVIRONMENT_ASSETS.boulder.bytes)
+  .reduce((sum, bytes) => sum + bytes, 0)
+  + Object.values(ENVIRONMENT_ASSETS.boulder.lightMapBytes).reduce((sum, bytes) => sum + bytes, 0));
 assert.equal(staged.metrics.state, 'settled');
 assert.equal(stagedLOD.levels.length, 3);
 assert.deepEqual(stagedLOD.levels.map(({ distance }) => distance), [
@@ -93,6 +100,9 @@ const fallback = streamEnvironmentLOD('fir', {
     if (level !== 'mid') throw new Error(`${level} unavailable`);
     return createTemplate();
   },
+  textureLoader: async () => new THREE.DataTexture(
+    new Uint8Array([180, 180, 180, 255]), 1, 1, THREE.RGBAFormat,
+  ),
   idleScheduler: () => Promise.resolve(),
   onError: (error, kind, level) => fallbackErrors.push({ error, kind, level }),
 });
@@ -157,6 +167,7 @@ const attached = attachEnvironmentHLOD(root, 'ultra', [
   { kind: 'fir', position: [-20, 0, 0] },
 ], {
   modelLoader: async () => createTemplate(),
+  textureLoader: async () => bakedTexture,
   idleScheduler: () => Promise.resolve(),
 });
 const group = await attached;

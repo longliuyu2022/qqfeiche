@@ -7,6 +7,21 @@ Attribution is not required, but source information is retained here for auditab
 
 License statement: https://polyhaven.com/license
 
+## Static lightmaps
+
+`lightmaps/<asset>/<asset>-<level>.png` contains the deployable 64x64 static
+irradiance map for every authored environment GLB. They are generated locally
+with `node scripts/generate-environment-lightmaps.mjs`; no third-party image is
+embedded in these files. The generator decodes the Meshopt geometry, evaluates
+a fixed key light and sky contribution from each vertex normal, splats the
+result through the model UVs, and dilates uncovered texels.
+
+The original Poly Haven models do not include an independent lightmap unwrap.
+The generator creates a dedicated normalized `TEXCOORD_1` accessor for every
+primitive and packs each primitive into a separate atlas tile. At runtime
+Three.js binds the PNG to `material.lightMap` with texture channel 1. This is a
+real static irradiance bake with an independent deployable UV2 data stream.
+
 The texture files are the 1K JPG variants reported by the Poly Haven public API.
 `normal-gl.jpg` contains the OpenGL normal map. The HDRI is the 1K Radiance HDR
 variant and is used only for scene reflections and image-based lighting.
