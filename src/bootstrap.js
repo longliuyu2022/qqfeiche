@@ -9,11 +9,12 @@ import { formatRank, getRankTier, loadRankState } from './ranked.js';
 import { isOwned, loadWallet } from './shop.js';
 import { createShopUi } from './shop-ui.js';
 import { createAchievementsUi } from './achievements-ui.js';
+import { getAuthSession, loginAccount, logoutAccount, registerAccount } from './auth-client.js';
 
 const ui = Object.fromEntries([
   'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeKicker', 'homeRank', 'homeCoins',
   'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'homeTrackSubtitle', 'trackSelector', 'garageSelector',
-  'startRace', 'openMultiplayer', 'openShop', 'openAchievements',
+  'startRace', 'openMultiplayer', 'openShop', 'openAchievements', 'openAccount', 'openAccountAction', 'homeAccount',
   'openSettings', 'settingsMenu', 'closeSettings', 'soundEnabled',
   'masterVolume', 'volumeValue', 'qualitySetting', 'vibrationEnabled',
   'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'ghostEnabled',
@@ -21,6 +22,9 @@ const ui = Object.fromEntries([
   'onlineConnect', 'onlineLobby', 'onlineName', 'roomCode', 'createRoom', 'joinRoom',
   'copyRoomCode', 'onlineRoomCode', 'onlineMapName', 'onlinePlayers', 'onlineStatus',
   'startOnlineRace', 'leaveRoom', 'quickMatch',
+  'accountMenu', 'closeAccount', 'accountSignedOut', 'accountSignedIn', 'accountTabs',
+  'accountForm', 'accountUsername', 'accountPassword', 'accountConfirmRow', 'accountConfirm',
+  'accountSubmit', 'accountLogout', 'accountCurrentUser', 'accountStatus',
 ].map((id) => [id, document.getElementById(id)]));
 
 let preferences = loadPreferences();
@@ -32,6 +36,9 @@ let selectedCarId = getCarById(preferences.carId).id;
 let bootstrapActive = true;
 let multiplayer = null;
 let onlineBusy = false;
+let accountUser = null;
+let accountMode = 'login';
+let accountBusy = false;
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return '--:--.---';
@@ -219,6 +226,121 @@ function setSettingsVisible(visible) {
   if (visible) syncSettings();
 }
 
+function setAccountStatus(message = '', tone = '') {
+  ui.accountStatus.textContent = message;
+  ui.accountStatus.dataset.tone = tone;
+}
+
+function setAccountBusy(value) {
+  accountBusy = value;
+  ui.accountUsername.disabled = value;
+  ui.accountPassword.disabled = value;
+  ui.accountConfirm.disabled = value;
+  ui.accountSubmit.disabled = value;
+  ui.accountLogout.disabled = value;
+  for (const button of ui.accountTabs.querySelectorAll('[data-auth-mode]')) button.disabled = value;
+}
+
+function setAccountMode(mode) {
+  if (accountBusy) return;
+  accountMode = mode === 'register' ? 'register' : 'login';
+  const registering = accountMode === 'register';
+  for (const button of ui.accountTabs.querySelectorAll('[data-auth-mode]')) {
+    const selected = button.dataset.authMode === accountMode;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-selected', String(selected));
+  }
+  ui.accountConfirmRow.hidden = !registering;
+  ui.accountConfirm.required = registering;
+  ui.accountPassword.autocomplete = registering ? 'new-password' : 'current-password';
+  ui.accountSubmit.textContent = registering ? '创建账号' : '登录';
+  setAccountStatus();
+}
+
+function renderAccount() {
+  const signedIn = Boolean(accountUser);
+  ui.accountSignedOut.hidden = signedIn;
+  ui.accountSignedIn.hidden = !signedIn;
+  ui.accountCurrentUser.textContent = accountUser?.username || '—';
+  ui.homeAccount.textContent = accountUser?.username || '游客';
+  ui.openAccount.dataset.signedIn = String(signedIn);
+  if (signedIn) {
+    ui.onlineName.value = accountUser.username;
+    ui.onlineName.readOnly = true;
+    ui.onlineName.setAttribute('aria-label', `已登录车手 ${accountUser.username}`);
+  } else {
+    ui.onlineName.readOnly = false;
+    ui.onlineName.removeAttribute('aria-label');
+  }
+}
+
+function setAccountVisible(visible) {
+  ui.accountMenu.hidden = !visible;
+  if (!visible) return;
+  renderAccount();
+  setAccountStatus();
+  setTimeout(() => (accountUser ? ui.accountLogout : ui.accountUsername).focus(), 0);
+}
+
+async function refreshAccount() {
+  try {
+    const session = await getAuthSession();
+    accountUser = session.user || null;
+  } catch {
+    accountUser = null;
+  }
+  renderAccount();
+  return accountUser;
+}
+
+async function submitAccount() {
+  if (accountBusy) return;
+  const username = ui.accountUsername.value.trim();
+  const password = ui.accountPassword.value;
+  if (accountMode === 'register' && password !== ui.accountConfirm.value) {
+    setAccountStatus('两次输入的密码不一致', 'error');
+    ui.accountConfirm.focus();
+    return;
+  }
+  setAccountBusy(true);
+  setAccountStatus(accountMode === 'register' ? '正在创建车手账号…' : '正在登录…');
+  try {
+    const result = accountMode === 'register'
+      ? await registerAccount({ username, password })
+      : await loginAccount({ username, password });
+    accountUser = result.user || null;
+    ui.accountPassword.value = '';
+    ui.accountConfirm.value = '';
+    renderAccount();
+    setAccountStatus(accountMode === 'register' ? '账号创建成功，已自动登录' : '登录成功', 'success');
+  } catch (error) {
+    setAccountStatus(error.message || '账号请求失败，请稍后重试', 'error');
+  } finally {
+    setAccountBusy(false);
+  }
+}
+
+async function signOutAccount() {
+  if (accountBusy) return;
+  let signedOut = false;
+  setAccountBusy(true);
+  setAccountStatus('正在退出…');
+  try {
+    await logoutAccount();
+    accountUser = null;
+    renderAccount();
+    signedOut = true;
+  } catch (error) {
+    setAccountStatus(error.message || '退出失败，请稍后重试', 'error');
+  } finally {
+    setAccountBusy(false);
+    if (signedOut) {
+      setAccountMode('login');
+      setAccountStatus('已退出登录', 'success');
+    }
+  }
+}
+
 function setOnlineStatus(message, tone = '') {
   ui.onlineStatus.textContent = message;
   ui.onlineStatus.dataset.tone = tone;
@@ -345,6 +467,7 @@ async function launchGame({ online = false } = {}) {
   preferences = savePreferences({ ...preferences, lastMode: selectedMode, lastTrack: selectedTrack });
   ui.settingsMenu.hidden = true;
   ui.multiplayerMenu.hidden = true;
+  ui.accountMenu.hidden = true;
   ui.startRace.disabled = true;
   ui.loading.style.display = 'flex';
   ui.loading.classList.remove('done');
@@ -398,6 +521,17 @@ ui.openSettings.addEventListener('click', () => setSettingsVisible(true));
 ui.closeSettings.addEventListener('click', () => setSettingsVisible(false));
 ui.openShop?.addEventListener('click', () => shopUi.open());
 ui.openAchievements?.addEventListener('click', () => achievementsUi.open());
+ui.openAccount.addEventListener('click', () => setAccountVisible(true));
+ui.openAccountAction.addEventListener('click', () => setAccountVisible(true));
+ui.closeAccount.addEventListener('click', () => setAccountVisible(false));
+for (const button of ui.accountTabs.querySelectorAll('[data-auth-mode]')) {
+  button.addEventListener('click', () => setAccountMode(button.dataset.authMode));
+}
+ui.accountForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  submitAccount();
+});
+ui.accountLogout.addEventListener('click', () => signOutAccount());
 ui.soundEnabled.addEventListener('change', () => applyPreferences({ soundEnabled: ui.soundEnabled.checked }));
 ui.masterVolume.addEventListener('input', () => applyPreferences({ masterVolume: Number(ui.masterVolume.value) }));
 ui.musicEnabled.addEventListener('change', () => applyPreferences({ musicEnabled: ui.musicEnabled.checked }));
@@ -408,6 +542,10 @@ ui.qualitySetting.addEventListener('change', () => applyPreferences({ quality: u
 ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibration: ui.vibrationEnabled.checked }));
 ui.cameraShakeEnabled.addEventListener('change', () => applyPreferences({ cameraShake: ui.cameraShakeEnabled.checked }));
 window.addEventListener('keydown', (event) => {
+  if (!ui.accountMenu.hidden) {
+    if (event.code === 'Escape') setAccountVisible(false);
+    return;
+  }
   if (!bootstrapActive) return;
   if (shopUi.visible) {
     if (event.code === 'Escape') shopUi.close();
@@ -433,6 +571,10 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.__NEON_APEX_ANDROID_BACK__ = () => {
+  if (!ui.accountMenu.hidden) {
+    setAccountVisible(false);
+    return true;
+  }
   if (!bootstrapActive) return false;
   if (shopUi.visible) {
     shopUi.close();
@@ -461,3 +603,8 @@ syncSettings();
 renderGarage();
 renderHome();
 window.__NEON_APEX_BOOTSTRAP_READY__ = true;
+refreshAccount();
+Object.defineProperty(window, '__NEON_APEX_ACCOUNT__', {
+  configurable: true,
+  get: () => accountUser ? { ...accountUser } : null,
+});

@@ -162,6 +162,10 @@ body[data-track='coast'] .home-screen { --home-bg: url('/assets/ui/home-bg-coast
 .status-chip { min-width: 108px; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; align-items: center; column-gap: 6px; padding: 7px 13px 8px; border: 1px solid var(--line); background: linear-gradient(120deg, rgba(4,10,15,.86), rgba(9,18,24,.5)); backdrop-filter: blur(10px); clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px)); }
 .status-chip > span { grid-column: 1 / -1; color: #7d939c; font-size: 8px; font-weight: 800; letter-spacing: .12em; }
 .status-chip b { grid-column: 1 / -1; margin-top: 3px; color: #eafcff; font: 800 clamp(12px, 1.05vw, 15px) "Microsoft YaHei", sans-serif; white-space: nowrap; }
+.status-account { max-width: 150px; appearance: none; color: inherit; text-align: left; cursor: pointer; }
+.status-account:hover, .status-account[data-signed-in="true"] { border-color: rgba(217,255,67,.44); box-shadow: inset 0 0 20px rgba(217,255,67,.08); }
+.status-account b { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status-account[data-signed-in="true"] b { color: var(--acid); }
 .status-rank { border-color: rgba(53,231,255,.3); box-shadow: inset 0 0 20px rgba(53,231,255,.08); }
 .status-coins { border-color: rgba(255,209,102,.34); box-shadow: inset 0 0 20px rgba(255,177,60,.09); }
 .status-coins .coin-icon { grid-column: 1; grid-row: 2; margin-top: 3px; }
@@ -224,6 +228,8 @@ body[data-track='coast'] .home-screen { --home-bg: url('/assets/ui/home-bg-coast
 .home-sub-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .home-sub-actions button { height: clamp(38px, 6vh, 50px); font: 800 clamp(11px, 1vw, 14px) "Microsoft YaHei", sans-serif; cursor: pointer; transition: background .16s, color .16s, border-color .16s, transform .12s; clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 9px 100%, 0 calc(100% - 9px)); }
 .home-sub-actions button:active { transform: translateY(2px); }
+.home-account { border: 1px solid rgba(183,139,255,.42); background: rgba(18,10,30,.76); color: #d8c4ff; }
+.home-account:hover { border-color: #b78bff; background: rgba(183,139,255,.18); color: #f2eaff; }
 .home-settings { border: 1px solid rgba(166,238,255,.28); background: rgba(3,9,13,.72); color: #d8edf1; }
 .home-settings:hover { border-color: var(--cyan); color: var(--cyan-hot); background: rgba(53,231,255,.12); }
 .home-online { border: 1px solid rgba(217,255,67,.42); background: rgba(9,18,16,.78); color: var(--acid); }
@@ -280,6 +286,24 @@ body.boosting .speed-lines { opacity: .62; animation-duration: .2s; }
 .settings-modal .primary-action { margin-top: 18px; }
 .multiplayer-modal .modal-content { position: relative; width: min(470px, calc(100vw - 32px)); padding: 34px 38px; text-align: left; }
 .multiplayer-modal h1 { margin-bottom: 20px; }
+.account-modal .modal-content { position: relative; width: min(450px, calc(100vw - 32px)); padding: 34px 38px; text-align: left; }
+.account-modal h1 { margin-bottom: 20px; }
+.account-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 18px; border: 1px solid rgba(166,238,255,.2); }
+.account-tabs button { height: 42px; margin: 0; background: rgba(3,9,13,.7); color: #82979f; }
+.account-tabs button + button { border-left: 1px solid rgba(166,238,255,.16); }
+.account-tabs button.active { background: rgba(53,231,255,.17); color: var(--cyan-hot); box-shadow: inset 0 -3px var(--cyan); }
+.account-form { display: grid; gap: 12px; }
+.account-form label { display: grid; gap: 6px; color: #78909a; font-size: 9px; font-weight: 800; }
+.account-form input { width: 100%; height: 44px; padding: 0 13px; border: 1px solid rgba(166,238,255,.22); outline: 0; background: #081117; color: white; font: 700 15px "Microsoft YaHei", sans-serif; }
+.account-form input:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px rgba(53,231,255,.1); }
+.account-form .primary-action { margin-top: 4px; }
+.account-signed-in { padding: 22px 0 8px; border-top: 1px solid rgba(166,238,255,.16); text-align: center; }
+.account-signed-in > span { display: block; color: #718891; font-size: 9px; font-weight: 800; }
+.account-signed-in > strong { display: block; min-width: 0; margin: 8px 0 18px; overflow: hidden; color: var(--acid); font: 800 24px "Microsoft YaHei", sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+.account-status { min-height: 16px; margin: 13px 0 0 !important; text-align: center; }
+.account-status[data-tone="error"] { color: #ff8794; }
+.account-status[data-tone="success"] { color: var(--acid); }
+.account-modal button:disabled, .account-form input:disabled { cursor: wait; opacity: .55; }
 .modal-close { position: absolute; top: 12px; right: 12px; width: 36px !important; height: 36px !important; margin: 0 !important; border: 1px solid rgba(166,238,255,.2) !important; background: transparent !important; color: #b8cbd0 !important; font-size: 25px; line-height: 1; }
 .online-connect label, .online-join-row label { display: flex; flex-direction: column; gap: 6px; color: #78909a; font-size: 9px; font-weight: 800; }
 .online-connect input { height: 42px; padding: 0 12px; border: 1px solid rgba(166,238,255,.22); outline: 0; background: #081117; color: white; font: 700 15px "Microsoft YaHei", sans-serif; }

@@ -14,6 +14,7 @@ const START_ZONE_MARGIN = 0.03;
 const ZONE_CLEARANCE_METERS = 5;
 const PLACEMENT_ATTEMPTS = 32;
 const SHORTCUT_WIDTH_RATIO = 0.68;
+const SHORTCUT_MOUTH_OVERLAP = 1.6;
 const SHORTCUT_SPAN_OPTIONS = Object.freeze([120, 170, 230, 300, 380]);
 const SHORTCUT_PATH_SAMPLES = 15;
 const SHORTCUT_CUT = 0.86;
@@ -154,9 +155,11 @@ function traceShortcut(curve, spine, startT, endT, spanT, trackLength, roadWidth
   const bow = chordMid.clone().sub(midFrame.point);
   const insideSign = Math.sign(bow.dot(midFrame.side)) || 1;
   const sagitta = Math.hypot(bow.x, bow.z);
-  // The branch peels off from the road shoulder rather than the centre line so
-  // the fork is something a car already hugging that edge can simply follow.
-  const edgeOffset = roadWidth * 0.5 - 2;
+  // Keep only a narrow drivable overlap between the main road and the branch.
+  // The shortcut mouth now sits beyond the shoulder, requiring an intentional
+  // lateral line instead of catching cars that merely drift off centre.
+  const shortcutHalfWidth = roadWidth * SHORTCUT_WIDTH_RATIO * 0.5;
+  const edgeOffset = roadWidth * 0.5 + shortcutHalfWidth - SHORTCUT_MOUTH_OVERLAP;
   const peak = Math.min(SHORTCUT_MAX_DEVIATION, Math.max(edgeOffset + 5, sagitta * SHORTCUT_CUT));
   if (peak <= edgeOffset + 1) return null;
 
@@ -194,7 +197,15 @@ function traceShortcut(curve, spine, startT, endT, spanT, trackLength, roadWidth
       if (Math.hypot(point.x - sample.x, point.z - sample.z) < SHORTCUT_SELF_CLEARANCE) return null;
     }
   }
-  return { points, maxDeviation, pathLength, saved, side: insideSign, startPoint, endPoint };
+  return {
+    points,
+    maxDeviation,
+    pathLength,
+    saved,
+    side: insideSign,
+    startPoint: points[0].clone(),
+    endPoint: points.at(-1).clone(),
+  };
 }
 
 /**

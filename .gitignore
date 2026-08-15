@@ -18,6 +18,7 @@ artifacts/apk/
 artifacts/aab/
 # 会话与任务状态，非源码
 .mindfs/
+server/data/*.json
 
 # 签名材料绝不入库
 *.jks

@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
+import { AuthError, createAuthStore } from './auth-store.mjs';
 import { validateRaceState } from './race-validation.mjs';
 import {
   createRankedStore, describeRank, normalizePlayerId, rankOrdinal,
@@ -18,6 +19,11 @@ const MAX_CONNECTIONS_PER_IP = envInteger('NEON_APEX_MAX_CONNECTIONS_PER_IP', 12
 const LOBBY_ACTION_LIMIT = envInteger('NEON_APEX_LOBBY_ACTION_LIMIT', 12, 1, 100);
 const LOBBY_ACTION_WINDOW_MS = envInteger('NEON_APEX_LOBBY_ACTION_WINDOW_MS', 10000, 1000, 60000);
 const UNAUTHENTICATED_IDLE_MS = envInteger('NEON_APEX_UNAUTHENTICATED_IDLE_MS', 15000, 1000, 60000);
+const AUTH_ACTION_LIMIT = envInteger('NEON_APEX_AUTH_ACTION_LIMIT', 12, 2, 100);
+const AUTH_ACTION_WINDOW_MS = envInteger('NEON_APEX_AUTH_ACTION_WINDOW_MS', 10 * 60 * 1000, 1000, 60 * 60 * 1000);
+const AUTH_BODY_BYTES = 4096;
+const AUTH_COOKIE = 'neon_apex_session';
+const AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 const MAX_INVALID_STATES = 8;
 const MAP_IDS = new Set(['night', 'day', 'alpine', 'canyon', 'coast']);
 // Ranked (quick match) knobs.
@@ -29,7 +35,9 @@ const RANKED_MAPS = parseMapList(process.env.NEON_APEX_RANKED_MAPS);
 const rooms = new Map();
 const connectionsByIp = new Map();
 const lobbyActionsByIp = new Map();
+const authActionsByIp = new Map();
 const rankedStore = createRankedStore({ filePath: process.env.NEON_APEX_RANK_FILE || undefined });
+const authStore = createAuthStore({ filePath: process.env.NEON_APEX_AUTH_FILE || undefined });
 
 function envInteger(name, fallback, minimum, maximum) {
   const value = Number.parseInt(process.env[name] ?? '', 10);
@@ -44,8 +52,12 @@ function parseMapList(value) {
   return parsed.length ? parsed : [...MAP_IDS];
 }
 
-function json(response, status, body) {
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+function json(response, status, body, headers = {}) {
+  response.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    ...headers,
+  });
   response.end(JSON.stringify(body));
 }
 
@@ -60,6 +72,110 @@ function clientIp(request) {
   if (!loopback || !forwarded) return direct;
   const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
   return String(value).split(',')[0].trim().slice(0, 64) || direct;
+}
+
+function cookieValue(request, name) {
+  const header = String(request.headers.cookie || '');
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(separator + 1).trim());
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function secureRequest(request) {
+  return request.socket.encrypted || String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+}
+
+function sessionCookie(request, token, maxAge = AUTH_COOKIE_MAX_AGE) {
+  const value = token ? encodeURIComponent(token) : '';
+  return `${AUTH_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`
+    + (secureRequest(request) ? '; Secure' : '');
+}
+
+function sameOriginRequest(request) {
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === request.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+function consumeAuthAction(request) {
+  const now = Date.now();
+  const key = clientIp(request);
+  let bucket = authActionsByIp.get(key);
+  if (!bucket || now - bucket.startedAt >= AUTH_ACTION_WINDOW_MS) {
+    bucket = { startedAt: now, count: 0 };
+    authActionsByIp.set(key, bucket);
+  }
+  if (bucket.count >= AUTH_ACTION_LIMIT) return false;
+  bucket.count += 1;
+  return true;
+}
+
+function readJsonBody(request) {
+  return new Promise((resolve, reject) => {
+    if (!String(request.headers['content-type'] || '').toLowerCase().startsWith('application/json')) {
+      reject(new AuthError('UNSUPPORTED_MEDIA_TYPE', '请求必须使用 JSON', 415));
+      request.resume();
+      return;
+    }
+    let size = 0;
+    let tooLarge = false;
+    const chunks = [];
+    request.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > AUTH_BODY_BYTES) {
+        tooLarge = true;
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on('end', () => {
+      if (tooLarge) return reject(new AuthError('BODY_TOO_LARGE', '请求内容过大', 413));
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
+      } catch {
+        reject(new AuthError('INVALID_JSON', 'JSON 格式无效', 400));
+      }
+    });
+    request.on('error', reject);
+  });
+}
+
+async function handleAuthRequest(request, response, path) {
+  if (!sameOriginRequest(request)) return json(response, 403, { error: 'CROSS_ORIGIN', message: '拒绝跨站账号请求' });
+  const token = cookieValue(request, AUTH_COOKIE);
+  if (path === '/multiplayer/auth/session' && request.method === 'GET') {
+    return json(response, 200, { user: authStore.authenticate(token) });
+  }
+  if (path === '/multiplayer/auth/logout' && request.method === 'POST') {
+    authStore.revoke(token);
+    return json(response, 200, { user: null }, { 'set-cookie': sessionCookie(request, null, 0) });
+  }
+  if (!['/multiplayer/auth/register', '/multiplayer/auth/login'].includes(path) || request.method !== 'POST') {
+    return json(response, 404, { error: 'not_found' });
+  }
+  if (!consumeAuthAction(request)) {
+    return json(response, 429, { error: 'RATE_LIMITED', message: '尝试次数过多，请稍后再试' }, { 'retry-after': '60' });
+  }
+  const body = await readJsonBody(request);
+  const user = path.endsWith('/register')
+    ? await authStore.register(body.username, body.password)
+    : await authStore.verify(body.username, body.password);
+  const session = authStore.createSession(user.id);
+  return json(response, path.endsWith('/register') ? 201 : 200, {
+    user: session.user,
+    expiresAt: session.expiresAt,
+  }, { 'set-cookie': sessionCookie(request, session.token) });
 }
 
 function rejectUpgrade(socket, status = 429, message = 'Too Many Requests') {
@@ -132,6 +248,7 @@ function serializeRoom(room) {
       // Never expose player.rankedId: it is the bearer credential for a rank.
       rank: describeRank(rankedStore.get(player.rankedId)),
       hasRank: Boolean(player.rankedId),
+      registered: Boolean(player.accountId),
     })),
   };
 }
@@ -165,15 +282,16 @@ function attachPlayer(socket, room, player) {
   player.disconnectedAt = null;
 }
 
-function createPlayer(name, index, rankedId = null) {
+function createPlayer(name, index, rankedId = null, account = null) {
   const palette = [0x04cbe5, 0xff4f61, 0xf2b84b, 0x7d5cff, 0x30bd78, 0xe773d2];
   return {
     id: randomUUID(),
     // Anonymous, client-held identity used to look up the persisted rank.
     // Never trusted for anything except addressing a row in the ranked store.
-    rankedId: normalizePlayerId(rankedId),
+    rankedId: normalizePlayerId(account?.id || rankedId),
+    accountId: account?.id || null,
     reconnectToken: randomBytes(24).toString('hex'),
-    name: sanitizeName(name),
+    name: sanitizeName(account?.username || name),
     color: palette[index % palette.length],
     socket: null,
     disconnectedAt: null,
@@ -234,7 +352,7 @@ function onCreate(socket, message) {
     return send(socket, { type: 'error', code: 'SERVER_BUSY', message: '比赛房间已满，请稍后重试' });
   }
   const room = createRoom({ map: message.map, mode: 'friendly' });
-  const player = createPlayer(message.name, 0, message.playerId);
+  const player = createPlayer(message.name, 0, message.playerId, socket.account);
   room.hostId = player.id;
   room.players.set(player.id, player);
   attachPlayer(socket, room, player);
@@ -253,7 +371,7 @@ function onJoin(socket, message) {
   if (room.mode === 'ranked') return send(socket, { type: 'error', code: 'ROOM_NOT_FOUND', message: '没有找到这个房间' });
   if (room.phase !== 'lobby') return send(socket, { type: 'error', code: 'RACE_STARTED', message: '比赛已经开始' });
   if (room.players.size >= MAX_PLAYERS) return send(socket, { type: 'error', code: 'ROOM_FULL', message: '房间已满（最多 6 人）' });
-  const player = createPlayer(message.name, room.players.size, message.playerId);
+  const player = createPlayer(message.name, room.players.size, message.playerId, socket.account);
   room.players.set(player.id, player);
   attachPlayer(socket, room, player);
   send(socket, {
@@ -377,7 +495,7 @@ function updateRankedMatch(room) {
 function onQuickMatch(socket, message) {
   if (socketPlayer(socket)) return;
   if (!consumeLobbyAction(socket)) return;
-  const rankedId = normalizePlayerId(message.playerId);
+  const rankedId = normalizePlayerId(socket.account?.id || message.playerId);
   if (!rankedId) {
     return send(socket, { type: 'error', code: 'INVALID_PLAYER_ID', message: '排位赛需要有效的玩家标识' });
   }
@@ -395,7 +513,7 @@ function onQuickMatch(socket, message) {
       bucket,
     });
   }
-  const player = createPlayer(message.name, room.players.size, rankedId);
+  const player = createPlayer(message.name, room.players.size, rankedId, socket.account);
   if (!room.hostId) room.hostId = player.id;
   room.players.set(player.id, player);
   attachPlayer(socket, room, player);
@@ -644,13 +762,24 @@ function onMessage(socket, raw) {
   }
 }
 
-const httpServer = createServer((request, response) => {
-  if (request.url === '/multiplayer/healthz' || request.url === '/healthz') {
-    return json(response, 200, {
-      status: 'ok', rooms: rooms.size, connections: webSocketServer.clients.size, uptime: Math.floor(process.uptime()),
-    });
+const httpServer = createServer(async (request, response) => {
+  try {
+    const path = new URL(request.url, 'http://localhost').pathname;
+    if (path === '/multiplayer/healthz' || path === '/healthz') {
+      return json(response, 200, {
+        status: 'ok', rooms: rooms.size, connections: webSocketServer.clients.size,
+        accounts: authStore.size, uptime: Math.floor(process.uptime()),
+      });
+    }
+    if (path.startsWith('/multiplayer/auth/')) return await handleAuthRequest(request, response, path);
+    return json(response, 404, { error: 'not_found' });
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return json(response, error.status, { error: error.code, message: error.message });
+    }
+    console.error('[auth] request failed', error?.message || error);
+    return json(response, 500, { error: 'INTERNAL_ERROR', message: '账号服务暂时不可用' });
   }
-  return json(response, 404, { error: 'not_found' });
 });
 
 const webSocketServer = new WebSocketServer({ noServer: true, maxPayload: 4096 });
@@ -662,11 +791,13 @@ httpServer.on('upgrade', (request, socket, head) => {
   if (webSocketServer.clients.size >= MAX_CONNECTIONS || ipConnections >= MAX_CONNECTIONS_PER_IP) {
     return rejectUpgrade(socket);
   }
+  request.account = authStore.authenticate(cookieValue(request, AUTH_COOKIE));
   webSocketServer.handleUpgrade(request, socket, head, (client) => webSocketServer.emit('connection', client, request));
 });
 
 webSocketServer.on('connection', (socket, request) => {
   socket.clientIp = request.clientIp;
+  socket.account = request.account || null;
   connectionsByIp.set(socket.clientIp, (connectionsByIp.get(socket.clientIp) ?? 0) + 1);
   socket.messageWindowAt = Date.now();
   socket.messageCount = 0;
@@ -692,6 +823,9 @@ setInterval(() => {
   const now = Date.now();
   for (const [ip, bucket] of lobbyActionsByIp) {
     if (now - bucket.startedAt > LOBBY_ACTION_WINDOW_MS * 2) lobbyActionsByIp.delete(ip);
+  }
+  for (const [ip, bucket] of authActionsByIp) {
+    if (now - bucket.startedAt > AUTH_ACTION_WINDOW_MS * 2) authActionsByIp.delete(ip);
   }
   for (const room of rooms.values()) {
     for (const player of room.players.values()) {
@@ -728,6 +862,7 @@ httpServer.listen(PORT, HOST, () => {
 function shutdown(signal) {
   try {
     rankedStore.close();
+    authStore.close();
   } finally {
     httpServer.close();
     process.exit(signal === 'SIGINT' ? 130 : 0);

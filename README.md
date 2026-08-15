@@ -10,13 +10,23 @@
 >
 > Android 下载：[APK](https://gaokao.aiimage.icu/downloads/neon-apex-release.apk) · [AAB](https://gaokao.aiimage.icu/downloads/neon-apex-release.aab)
 
+## 当前开发版更新
+
+- 新增车手账号系统：首页支持用户名与自定义密码注册、登录、刷新后会话恢复和退出登录；游客模式继续保留
+- 密码只在服务端使用 `scrypt` + 独立随机盐保存，登录态使用 `HttpOnly`、`SameSite=Strict` Cookie；账号接口包含同源校验、请求体上限和 IP 频率限制
+- 登录账号成为在线排位的服务端身份，同一账号在不同设备使用同一用户名与段位，不再依赖单设备匿名 ID
+- 账号与会话数据原子写入独立持久化目录 `/opt/neon-apex/multiplayer/data`，联机服务原子换版不会清空账号
+- 近道入口中心移到主路肩外，只保留约 1.6m 的路面搭接，物理触发线由 3m 提高到 6.5m，必须主动切线才能进入
+- 近道与主赛道共用护栏碰撞响应：斜擦保留沿墙速度并自动校正车头，不再顶墙停住；正面高速撞击仍保留安全重生
+- 新增账号 API、浏览器账号闭环和近道擦墙回归测试
+
 ## v1.7.0 更新
 
 - 新增「极致 3A」画质档：高端设备启用 GTAO 接触阴影、SMAA 抗锯齿、VSM 4096 阴影、最高 2x 像素密度；低端设备自动走轻量降级路径
 - 五张地图全部接入对应的 Poly Haven CC0 HDRI，统一提升车漆、金属、路面和水面的环境反射与间接光；晴川新增完整 PBR 沥青材质
 - Ultra 档提高五图山体、植被、云层、星空、雨雪和风沙密度，balanced 档同步降低场景复杂度
 - 喷射体系补齐 `CWW` / `WCW` 组合喷判定、独立持续时间、技巧分和屏幕反馈
-- 近道扩展到每图 2 条，互不重叠且各自至少省 12m（night 15.4+20.2m、day 12.6+38.4m、alpine 12.3+44.3m、canyon 12.5+21.4m、coast 17.1+26.2m）
+- 近道扩展到每图 2 条，互不重叠且各自至少省 12m（当前入口布局：night 19.1+24.5m、day 15.7+44.8m、alpine 15.3+50.7m、canyon 16.2+25.5m、coast 21.0+26.2m）
 - AI 对手会走近道：按性格决定是否切入（同一场里选择稳定可复现），实测单条支路省 0.40 秒/圈，收益只来自路程更短、不加速度
 - 新增成就系统：20 条成就（里程碑/技巧/竞速/近道机关/收藏/段位六类），解锁发放 100–1500 金币，首页新增成就面板与进度条
 - 商店扩展到 6 大类共 26 件商品：新增 4 款轮毂、4 款尾翼、4 种喇叭（双音/警笛/芯片音/气笛，按 `H` 键鸣笛）
@@ -132,6 +142,7 @@
 - 改装商店：金币结算，车辆/车漆/贴花/轮毂/尾翼/喇叭六类共 26 件商品
 - 成就系统：20 条成就与金币奖励
 - 快速排位联机：按段位匹配，服务端结算段位分
+- 车手账号：用户名/密码注册登录、跨设备会话和账号绑定在线段位
 - 影子挑战幽灵回放、本地排位段位、程序化 BGM 与中文播报语音
 - 2–6 人房间码联机好友赛，包含同步发车、实时车辆状态、排名和断线恢复
 - 6 车同场竞速，包含 AI 超车、封堵和动态车道策略
@@ -159,6 +170,14 @@ npm run dev -- --port 4173
 ```
 
 浏览器打开 <http://localhost:4173/>。开发服务器默认监听所有网络接口，局域网内也可通过主机 IP 访问。
+
+账号 API 由联机服务提供，开发时需另开一个终端运行：
+
+```bash
+npm run server
+```
+
+Vite 会把 `/multiplayer`（HTTP 与 WebSocket）代理到 `127.0.0.1:3010`。账号端点为 `POST /multiplayer/auth/register`、`POST /multiplayer/auth/login`、`GET /multiplayer/auth/session` 和 `POST /multiplayer/auth/logout`。密码不会以明文写盘，浏览器也不会读取会话令牌。
 
 ## 操作方式
 
@@ -196,6 +215,12 @@ npm test
 
 # 本地联机服务（开发服务器会代理 /multiplayer）
 npm run server
+
+# 账号服务与持久化安全测试
+npm run test:auth
+
+# 真实浏览器注册、会话恢复与退出回归
+npm run test:auth-browser
 
 # 双浏览器联机与白天地图回归
 npm run test:online-browser
@@ -294,6 +319,7 @@ neon-apex/
 │   ├── scenic-worlds.js       # 雪岭、峡谷、海岸路线与高细节场景
 │   ├── track-catalog.js       # 首页与运行时共享的地图信息
 │   ├── multiplayer-client.js  # 房间连接、同步与断线恢复
+│   ├── auth-client.js         # 同源账号 API 与 HttpOnly 会话客户端
 │   ├── vehicle-assets.js      # 主车模型加载与程序化备用车
 │   ├── speed-postprocess.js   # 高速径向模糊后处理
 │   ├── audio.js               # 引擎、漂移、氮气音效与播报语音
@@ -304,6 +330,7 @@ neon-apex/
 ├── public/assets/             # 车辆、地图封面、HDRI、PBR 材质与播报语音资源
 ├── tests/                     # 逻辑、触控和 Playwright 视觉测试
 ├── server/                    # 2–6 人房间和 WebSocket 状态服务
+│   ├── auth-store.mjs         # scrypt 密码、账号和哈希会话持久化
 │   ├── race-validation.mjs    # 联机进度、位置和完赛校验
 │   └── ranked-store.mjs       # 服务端段位分持久化
 ├── scripts/                   # APK 构建与线上部署脚本
@@ -323,7 +350,7 @@ neon-apex/
 GitHub Actions 工作流 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在推送到 `main` 和所有 Pull Request 上触发，使用 Node.js 20 依次执行：
 
 1. `npm ci` 按 `package-lock.json` 安装依赖（带 npm 缓存）
-2. `npm test` 跑完 15 套纯 Node 逻辑测试（赛制、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
+2. `npm test` 跑完 20 套纯 Node 逻辑测试（赛制、账号、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
 3. `npm run build` 生产构建
 4. 校验构建产物：`dist/index.html` 以及 `dist/assets` 下的 `.js` 与 `.css` 均存在且非空
 
@@ -358,7 +385,7 @@ npm run deploy
 npm run deploy:server
 ```
 
-网页部署脚本会原子切换 `/opt/neon-apex/dist` 并执行线上资源一致性验证；联机部署脚本会原子切换 `/opt/neon-apex/multiplayer/current`、重启 systemd 服务并检查本地健康端点。Caddy 将 `/multiplayer` 和 `/multiplayer/healthz` 反向代理到 `127.0.0.1:3010`。不要在未配置对应域名和目录的机器上直接执行。
+网页部署脚本会原子切换 `/opt/neon-apex/dist` 并执行线上资源一致性验证；联机部署脚本会原子切换 `/opt/neon-apex/multiplayer/current`、重启 systemd 服务并检查本地健康端点。账号和段位文件位于不会随 release 切换的 `/opt/neon-apex/multiplayer/data`，部署脚本会安装 systemd `ReadWritePaths` 白名单并把该目录限制给 `www-data`。Caddy 将 `/multiplayer`（含账号 API）和 `/multiplayer/healthz` 反向代理到 `127.0.0.1:3010`。不要在未配置对应域名和目录的机器上直接执行。
 
 线上健康标记：<https://gaokao.aiimage.icu/.well-known/neon-apex-health.json>
 

@@ -5,6 +5,8 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_ROOT="/opt/neon-apex/multiplayer"
 TARGET_DIR="${TARGET_ROOT}/current"
 RELEASE_DIR="${TARGET_ROOT}/releases"
+DATA_DIR="${TARGET_ROOT}/data"
+SYSTEMD_DROPIN_DIR="/etc/systemd/system/neon-apex-multiplayer.service.d"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "${TARGET_ROOT}"
 STAGE_DIR="$(mktemp -d "${TARGET_ROOT}/stage-${STAMP}.XXXXXX")"
@@ -26,6 +28,7 @@ rollback() {
 trap rollback EXIT
 
 install -m 0644 "${PROJECT_DIR}/server/index.mjs" "${STAGE_DIR}/index.mjs"
+install -m 0644 "${PROJECT_DIR}/server/auth-store.mjs" "${STAGE_DIR}/auth-store.mjs"
 install -m 0644 "${PROJECT_DIR}/server/race-validation.mjs" "${STAGE_DIR}/race-validation.mjs"
 install -m 0644 "${PROJECT_DIR}/server/ranked-store.mjs" "${STAGE_DIR}/ranked-store.mjs"
 # The release directory is flat, so `../src/` is unreachable there. Stage the
@@ -35,6 +38,7 @@ install -m 0644 "${PROJECT_DIR}/server/package.json" "${STAGE_DIR}/package.json"
 install -m 0644 "${PROJECT_DIR}/server/package-lock.json" "${STAGE_DIR}/package-lock.json"
 npm ci --omit=dev --ignore-scripts --prefix "${STAGE_DIR}"
 node --check "${STAGE_DIR}/index.mjs"
+node --check "${STAGE_DIR}/auth-store.mjs"
 node --check "${STAGE_DIR}/race-validation.mjs"
 node --check "${STAGE_DIR}/ranked-store.mjs"
 node --check "${STAGE_DIR}/ranked-rules.mjs"
@@ -42,12 +46,30 @@ node --check "${STAGE_DIR}/ranked-rules.mjs"
 # it would not have caught the missing ranked-store module that broke a deploy.
 node --input-type=module --eval "
   import { createRankedStore } from '${STAGE_DIR}/ranked-store.mjs';
+  import { createAuthStore } from '${STAGE_DIR}/auth-store.mjs';
   import { validateRaceState } from '${STAGE_DIR}/race-validation.mjs';
-  if (typeof createRankedStore !== 'function' || typeof validateRaceState !== 'function') {
+  if (typeof createRankedStore !== 'function' || typeof createAuthStore !== 'function' || typeof validateRaceState !== 'function') {
     throw new Error('staged multiplayer modules are incomplete');
   }
 "
 chmod 0755 "${STAGE_DIR}"
+
+# Account and rank data must survive atomic release swaps. The systemd service
+# uses ProtectSystem=strict, so explicitly grant its www-data process access to
+# this one persistent directory and nowhere else under /opt.
+mkdir -p "${DATA_DIR}" "${SYSTEMD_DROPIN_DIR}"
+if [[ ! -e "${DATA_DIR}/ranked.json" && -s "${TARGET_DIR}/data/ranked.json" ]]; then
+  install -m 0600 "${TARGET_DIR}/data/ranked.json" "${DATA_DIR}/ranked.json"
+fi
+chown -R www-data:www-data "${DATA_DIR}"
+chmod 0750 "${DATA_DIR}"
+cat > "${SYSTEMD_DROPIN_DIR}/storage.conf" <<EOF
+[Service]
+Environment=NEON_APEX_RANK_FILE=${DATA_DIR}/ranked.json
+Environment=NEON_APEX_AUTH_FILE=${DATA_DIR}/accounts.json
+ReadWritePaths=${DATA_DIR}
+EOF
+systemctl daemon-reload
 
 mkdir -p "${RELEASE_DIR}"
 if [[ -d "${TARGET_DIR}" ]]; then

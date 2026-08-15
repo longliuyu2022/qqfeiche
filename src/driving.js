@@ -40,8 +40,8 @@ const DEFAULTS = Object.freeze({
   checkpointGatePadding: 1.8,
   shortcutTolerance: 0.018,
   shortcutRespawnDelay: 0.9,
-  shortcutEntryOffset: 3,
-  shortcutEntryWindow: 0.06,
+  shortcutEntryOffset: 6.5,
+  shortcutEntryWindow: 0.045,
   crashRespawnSpeed: 28,
   crashHeadOnRatio: 0.98,
   wrongWayRespawnTime: 4,
@@ -1200,6 +1200,55 @@ export class ArcadeVehicle {
     return target;
   }
 
+  /** Shared barrier response for the main road and authored shortcut lanes. */
+  _resolveBarrierImpact(sample, sign, outwardSpeed) {
+    const impact = Math.max(0, outwardSpeed);
+    if (impact <= 0) return outwardSpeed;
+    const speedBeforeImpact = Math.max(horizontalLength(this.velocity), 1);
+    const headOnRatio = clamp01(impact / speedBeforeImpact);
+    const headOnThreshold = THREE.MathUtils.clamp(this.config.crashHeadOnRatio, 0.9, 1);
+    const tangentSpeed = this.velocity.dot(sample.tangent);
+
+    // Preserve the velocity along the barrier so a glancing impact guides the
+    // car through the lane instead of pinning it against the wall.
+    this.velocity.addScaledVector(_outward, -outwardSpeed);
+    const collisionSeverity = clamp01(headOnRatio / headOnThreshold);
+    const tangentRetention = THREE.MathUtils.lerp(0.995, 0.88, collisionSeverity ** 3);
+    this.velocity.multiplyScalar(tangentRetention);
+    const directCrash = headOnRatio >= headOnThreshold && impact >= this.config.crashRespawnSpeed;
+    const normalBounce = headOnRatio >= headOnThreshold
+      ? impact * 0.035
+      : impact * THREE.MathUtils.lerp(0.12, 0.03, collisionSeverity);
+    this.velocity.addScaledVector(_outward, -normalBounce);
+    if (directCrash) this._queueRespawn('heavy-crash', 0.65);
+    else {
+      const tangentDirection = Math.sign(tangentSpeed)
+        || Math.sign(_forward.dot(sample.tangent))
+        || 1;
+      this.heading = Math.atan2(
+        sample.tangent.x * tangentDirection,
+        sample.tangent.z * tangentDirection,
+      );
+      this.yawRate *= 0.2;
+    }
+
+    if (impact > 0.8 && this._collisionCooldown <= 0) {
+      const collisionImpact = clamp01(impact / 28);
+      this._collisionCooldown = this.config.collisionCooldown;
+      this.state.collisionCount += 1;
+      this.state.collisionImpact = Math.max(this.state.collisionImpact, collisionImpact);
+      if (impact > 4) this._breakSkillChain('collision');
+      this._emit('collision', {
+        impact,
+        normalizedImpact: collisionImpact,
+        headOnRatio,
+        side: sign < 0 ? 'left' : 'right',
+        state: this.getSnapshot(),
+      });
+    }
+    return this.velocity.dot(_outward);
+  }
+
   _applyTrackConstraint(delta) {
     const sample = this._findTrackSample(this.position, this._sampleScratch);
     if (!sample) return;
@@ -1225,56 +1274,7 @@ export class ArcadeVehicle {
       if (absoluteOffset > collisionLimit) {
         this.position.x = sample.point.x + sample.normal.x * collisionLimit * sign;
         this.position.z = sample.point.z + sample.normal.z * collisionLimit * sign;
-        const impact = Math.max(0, outwardSpeed);
-        if (impact > 0) {
-          const speedBeforeImpact = Math.max(horizontalLength(this.velocity), 1);
-          const headOnRatio = clamp01(impact / speedBeforeImpact);
-          const headOnThreshold = THREE.MathUtils.clamp(this.config.crashHeadOnRatio, 0.9, 1);
-          const tangentSpeed = this.velocity.dot(sample.tangent);
-          // Remove only the wall-normal component. The tangent component is the
-          // forward motion that lets a car scrape along a barrier instead of
-          // freezing after every oblique contact.
-          this.velocity.addScaledVector(_outward, -outwardSpeed);
-          const collisionSeverity = clamp01(headOnRatio / headOnThreshold);
-          const tangentRetention = THREE.MathUtils.lerp(0.995, 0.88, collisionSeverity ** 3);
-          this.velocity.multiplyScalar(tangentRetention);
-          const directCrash = headOnRatio >= headOnThreshold && impact >= this.config.crashRespawnSpeed;
-          const normalBounce = headOnRatio >= headOnThreshold
-            ? impact * 0.035
-            : impact * THREE.MathUtils.lerp(0.12, 0.03, collisionSeverity);
-          this.velocity.addScaledVector(_outward, -normalBounce);
-          outwardSpeed = this.velocity.dot(_outward);
-          const collisionImpact = clamp01(impact / 28);
-          if (directCrash) this._queueRespawn('heavy-crash', 0.65);
-          else {
-            // Keep sustained throttle from steering the car back into the same
-            // barrier every frame. Non-head-on contact guides the nose along
-            // the wall while retaining the existing direction of travel.
-            const tangentDirection = Math.sign(tangentSpeed)
-              || Math.sign(_forward.dot(sample.tangent))
-              || 1;
-            this.heading = Math.atan2(
-              sample.tangent.x * tangentDirection,
-              sample.tangent.z * tangentDirection,
-            );
-            this.yawRate *= 0.2;
-          }
-
-          if (impact > 0.8 && this._collisionCooldown <= 0) {
-            this._collisionCooldown = this.config.collisionCooldown;
-            this.state.collisionCount += 1;
-            this.state.collisionImpact = Math.max(this.state.collisionImpact, collisionImpact);
-            if (impact > 4) this._breakSkillChain('collision');
-            this._emit('collision', {
-              impact,
-              normalizedImpact: collisionImpact,
-              headOnRatio,
-              side: sign < 0 ? 'left' : 'right',
-              state: this.getSnapshot(),
-            });
-          }
-          outwardSpeed = this.velocity.dot(_outward);
-        }
+        outwardSpeed = this._resolveBarrierImpact(sample, sign, outwardSpeed);
       }
 
       if (outwardSpeed > 0) {
@@ -1420,25 +1420,7 @@ export class ArcadeVehicle {
       if (absoluteOffset > collisionLimit) {
         this.position.x = sample.point.x + sample.normal.x * collisionLimit * sign;
         this.position.z = sample.point.z + sample.normal.z * collisionLimit * sign;
-        if (outwardSpeed > 0) {
-          this.velocity.addScaledVector(_outward, -outwardSpeed * 1.04);
-          this.velocity.multiplyScalar(0.94);
-          const impact = outwardSpeed;
-          if (impact > 0.8 && this._collisionCooldown <= 0) {
-            this._collisionCooldown = this.config.collisionCooldown;
-            this.state.collisionCount += 1;
-            this.state.collisionImpact = Math.max(this.state.collisionImpact, clamp01(impact / 28));
-            if (impact > 4) this._breakSkillChain('collision');
-            this._emit('collision', {
-              impact,
-              normalizedImpact: clamp01(impact / 28),
-              headOnRatio: clamp01(impact / Math.max(horizontalLength(this.velocity), 1)),
-              side: sign < 0 ? 'left' : 'right',
-              state: this.getSnapshot(),
-            });
-          }
-          outwardSpeed = this.velocity.dot(_outward);
-        }
+        outwardSpeed = this._resolveBarrierImpact(sample, sign, outwardSpeed);
       }
       if (outwardSpeed > 0) {
         this.velocity.addScaledVector(_outward, -outwardSpeed * (1 - Math.exp(-this.config.boundaryGrip * delta)));

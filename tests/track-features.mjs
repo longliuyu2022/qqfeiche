@@ -263,17 +263,21 @@ function auditShortcuts(trackId, curve, layout, requested) {
     assert.equal(zone.points.length, shortcut.points.length);
     assert.ok(zone.points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.z)));
 
-    // The branch must start and finish on the drivable road it forks from, so a
-    // car hugging that shoulder can flow into and out of it without a jump.
+    // The branch centre sits beyond the shoulder with only a narrow deck
+    // overlap. This keeps it reachable while preventing accidental entries.
     const entryPoint = curve.getPointAt(shortcut.progress);
     const exitPoint = curve.getPointAt(shortcut.endProgress);
     const first = shortcut.points[0];
     const last = shortcut.points.at(-1);
     const entryOffset = Math.hypot(first.x - entryPoint.x, first.z - entryPoint.z);
     const exitOffset = Math.hypot(last.x - exitPoint.x, last.z - exitPoint.z);
-    assert.ok(entryOffset <= ROAD_WIDTH / 2, `${shortcut.id} must fork from the road (got ${entryOffset.toFixed(1)}m)`);
-    assert.ok(exitOffset <= ROAD_WIDTH / 2, `${shortcut.id} must rejoin onto the road (got ${exitOffset.toFixed(1)}m)`);
-    assert.ok(entryOffset > 2, `${shortcut.id} mouth must sit off the centre line`);
+    const branchHalfWidth = shortcut.width / 2;
+    const entryOverlap = ROAD_WIDTH / 2 + branchHalfWidth - entryOffset;
+    const exitOverlap = ROAD_WIDTH / 2 + branchHalfWidth - exitOffset;
+    assert.ok(entryOffset > ROAD_WIDTH / 2, `${shortcut.id} mouth centre must sit beyond the road shoulder`);
+    assert.ok(exitOffset > ROAD_WIDTH / 2, `${shortcut.id} exit centre must sit beyond the road shoulder`);
+    assert.ok(entryOverlap >= 1.4 && entryOverlap <= 1.8, `${shortcut.id} entry overlap should be deliberate (${entryOverlap.toFixed(1)}m)`);
+    assert.ok(exitOverlap >= 1.4 && exitOverlap <= 1.8, `${shortcut.id} exit overlap should be deliberate (${exitOverlap.toFixed(1)}m)`);
 
     // Its mouth and exit have to be clean road: no pad, no ramp, and no other
     // branch's corridor sitting where a driver has to commit to the fork.

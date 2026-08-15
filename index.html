@@ -105,6 +105,10 @@
               </div>
             </div>
             <div class="home-status-bar" aria-label="车手状态">
+              <button id="openAccount" class="status-chip status-account" type="button">
+                <span>ACCOUNT</span>
+                <b id="homeAccount">游客</b>
+              </button>
               <div class="status-chip status-rank">
                 <span>RANK</span>
                 <b id="homeRank">青铜 III · 0分</b>
@@ -156,6 +160,7 @@
           <div class="home-actions">
             <button id="startRace" class="home-start" type="button"><span aria-hidden="true"></span>开始比赛</button>
             <div class="home-sub-actions">
+              <button id="openAccountAction" class="home-account" type="button">账号</button>
               <button id="openMultiplayer" class="home-online" type="button">联机</button>
               <button id="openShop" class="home-shop" type="button">商店</button>
               <button id="openAchievements" class="home-achievements" type="button">成就</button>
@@ -164,6 +169,32 @@
           </div>
         </div>
       </section>
+
+      <div id="accountMenu" class="modal account-modal" hidden>
+        <div class="modal-content">
+          <span class="modal-kicker">DRIVER ACCOUNT</span>
+          <h1 id="accountTitle">车手账号</h1>
+          <div id="accountSignedOut" class="account-signed-out">
+            <div id="accountTabs" class="account-tabs" role="tablist" aria-label="登录或注册">
+              <button class="active" data-auth-mode="login" type="button" role="tab" aria-selected="true">登录</button>
+              <button data-auth-mode="register" type="button" role="tab" aria-selected="false">注册</button>
+            </div>
+            <form id="accountForm" class="account-form">
+              <label for="accountUsername"><span>用户名</span><input id="accountUsername" type="text" minlength="2" maxlength="20" autocomplete="username" placeholder="2–20 位用户名" required /></label>
+              <label for="accountPassword"><span>密码</span><input id="accountPassword" type="password" minlength="8" maxlength="72" autocomplete="current-password" placeholder="8–72 位自定义密码" required /></label>
+              <label id="accountConfirmRow" for="accountConfirm" hidden><span>确认密码</span><input id="accountConfirm" type="password" minlength="8" maxlength="72" autocomplete="new-password" placeholder="再次输入密码" /></label>
+              <button id="accountSubmit" class="primary-action" type="submit">登录</button>
+            </form>
+          </div>
+          <div id="accountSignedIn" class="account-signed-in" hidden>
+            <span>已登录车手</span>
+            <strong id="accountCurrentUser">—</strong>
+            <button id="accountLogout" class="secondary-action" type="button">退出登录</button>
+          </div>
+          <p id="accountStatus" class="account-status" aria-live="polite"></p>
+          <button id="closeAccount" class="modal-close" type="button" aria-label="关闭" title="关闭">&#x00D7;</button>
+        </div>
+      </div>
 
       <div id="multiplayerMenu" class="modal multiplayer-modal" hidden>
         <div class="modal-content">

@@ -286,7 +286,7 @@ const mouthTangent = curve.getTangentAt(shortcutStart).setY(0).normalize();
 const towardBranch = shortcutPoints[2].clone().sub(shortcutPoints[0]).setY(0).normalize();
 branchCar.position.copy(mouth).addScaledVector(
   new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), mouthTangent).normalize(),
-  branchSide * 5.2,
+  branchSide * 7,
 );
 branchCar.heading = Math.atan2(towardBranch.x, towardBranch.z);
 branchCar.velocity.copy(towardBranch).multiplyScalar(42);
@@ -324,6 +324,35 @@ assert.ok(
 );
 assert.equal(branchCar.state.wrongWay, false, 'the branch direction must not read as wrong way');
 
+// Shortcut barriers use the same scrape-friendly response as the main road:
+// an oblique hit must retain the branch tangent instead of pinning the car.
+const branchGlancingCar = new ArcadeVehicle({ trackCurve: curve, trackWidth: 16, checkpointCount: 12 });
+branchGlancingCar.setTrackFeatures({ shortcuts: [shortcutZone] });
+branchGlancingCar.startRace();
+branchGlancingCar.position.copy(mouth).addScaledVector(
+  new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), mouthTangent).normalize(),
+  branchSide * 7,
+);
+branchGlancingCar.heading = Math.atan2(towardBranch.x, towardBranch.z);
+branchGlancingCar.velocity.copy(towardBranch).multiplyScalar(36);
+branchGlancingCar.update(1 / 60, { throttle: 1 });
+assert.equal(branchGlancingCar.state.onShortcut, true, 'the deliberate shoulder line should enter the branch');
+const branchMiddle = shortcutPoints[7];
+const branchTangent = shortcutPoints[8].clone().sub(shortcutPoints[6]).setY(0).normalize();
+const branchNormal = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), branchTangent).normalize();
+const glancingVelocity = branchTangent.clone().multiplyScalar(32).addScaledVector(branchNormal, 11);
+branchGlancingCar.position.copy(branchMiddle).addScaledVector(branchNormal, shortcutZone.halfWidth + 1);
+branchGlancingCar.heading = Math.atan2(glancingVelocity.x, glancingVelocity.z);
+branchGlancingCar.velocity.copy(glancingVelocity);
+const branchProgressBeforeImpact = branchGlancingCar.state.trackProgress;
+for (let frame = 0; frame < 120; frame += 1) {
+  branchGlancingCar.update(1 / 60, { throttle: 1, steer: steerAlongBranch(branchGlancingCar) });
+}
+assert.ok(branchGlancingCar.speed > 28, 'an oblique shortcut wall hit should retain forward speed');
+assert.ok(branchGlancingCar.state.trackProgress > branchProgressBeforeImpact, 'shortcut wall contact should keep advancing');
+assert.equal(branchGlancingCar.state.respawnPending, false, 'an oblique shortcut wall hit should not queue recovery');
+assert.equal(branchGlancingCar.state.respawnCount, 0, 'an oblique shortcut wall hit should not stop and reset the car');
+
 console.log(JSON.stringify({
   checkpoints: checkpointEvents,
   laps: lapEvents,
@@ -344,4 +373,5 @@ console.log(JSON.stringify({
   shortcutEnters,
   shortcutExits,
   shortcutLateral: Number(maxLateralFromLine.toFixed(1)),
+  shortcutWallSpeed: Number(branchGlancingCar.speed.toFixed(1)),
 }));

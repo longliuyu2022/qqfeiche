@@ -413,7 +413,7 @@ function collectUi() {
     'pauseMenu', 'resultMenu', 'resultTitle', 'resultPosition', 'resultTime', 'bestLap', 'resultScore',
     'recordStatus', 'personalBest',
     'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeRank', 'homeCoins',
-    'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'settingsMenu',
+    'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'settingsMenu', 'accountMenu',
     'soundEnabled', 'masterVolume', 'volumeValue', 'qualitySetting',
     'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'ghostEnabled',
     'vibrationEnabled', 'cameraShakeEnabled', 'hudTrackName', 'raceFeedTitle', 'raceFeedMeta',
@@ -1633,6 +1633,7 @@ ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibratio
 ui.cameraShakeEnabled.addEventListener('change', () => applyPreferences({ cameraShake: ui.cameraShakeEnabled.checked }));
 window.addEventListener('keydown', (event) => {
   audio.start();
+  if (!ui.accountMenu.hidden) return;
   if (shopUi.visible) {
     if (event.code === 'Escape') shopUi.close();
     return;
@@ -1950,6 +1951,10 @@ for (const button of document.querySelectorAll('[data-car]')) {
 }
 
 window.__NEON_APEX_ANDROID_BACK__ = () => {
+  if (!ui.accountMenu.hidden) {
+    ui.accountMenu.hidden = true;
+    return true;
+  }
   if (shopUi.visible) {
     shopUi.close();
     return true;
