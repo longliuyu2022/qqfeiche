@@ -376,7 +376,7 @@ function removePlayer(room, playerId) {
   room.players.delete(playerId);
   // Settle before the room can disappear, otherwise a finisher who quits last
   // would lose the points they just earned.
-  if (room.mode === 'ranked' && room.phase === 'racing') maybeSettleRace(room);
+  if (room.phase === 'racing') maybeSettleRace(room);
   if (room.players.size === 0) {
     rooms.delete(room.code);
     return;
@@ -657,9 +657,10 @@ function onState(socket, message) {
 }
 
 function recordFinish(room, player) {
-  // Friend-code rooms keep their original fire-and-forget flow; only ranked
-  // races track a finish order and settle.
-  if (room.mode !== 'ranked' || !player.state?.finished) return;
+  // 好友房同样要记录冲线顺序并结算。settleRace 本就按 room.mode 区分：非排位房
+  // 只出名次、不动段位分（settlementReason = 'unranked_room'）。此处若继续只放行
+  // 排位赛，好友房就得干等 RANKED_RACE_TIMEOUT_MS 的超时清扫才结算。
+  if (!player.state?.finished) return;
   const entry = room.roster?.get(player.id);
   if (!entry || entry.finishRank) return;
   room.finishCount += 1;
@@ -678,7 +679,7 @@ function recordFinish(room, player) {
 
 // The race is over once nobody who is still around can improve the order.
 function maybeSettleRace(room) {
-  if (room.mode !== 'ranked' || room.phase !== 'racing' || room.settled || !room.roster) return;
+  if (room.phase !== 'racing' || room.settled || !room.roster) return;
   const pending = [...room.roster.values()].filter((entry) => {
     if (entry.finishRank || entry.invalid) return false;
     const player = room.players.get(entry.id);

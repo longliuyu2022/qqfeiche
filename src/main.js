@@ -1822,11 +1822,16 @@ raceSystem.on('finish', async (result) => {
     showCallout('等待服务器权威结算', 2.4);
     try {
       const authoritative = await onlineSession.waitForRankResult({ timeoutMs: 90000 });
-      const synchronized = rankStateFromServer(authoritative.rank, rankState);
-      if (synchronized) {
-        rankState = synchronized;
-        saveRankState(rankState);
-        renderRankBadge();
+      // 只有真正上分的结算才回写本地段位。好友房结算带的是
+      // settled:false / reason:'unranked_room'，其 rank 字段是按空 rankedId 取到的
+      // 默认段位，照搬会把玩家的本地段位洗成青铜。
+      if (authoritative.settled) {
+        const synchronized = rankStateFromServer(authoritative.rank, rankState);
+        if (synchronized) {
+          rankState = synchronized;
+          saveRankState(rankState);
+          renderRankBadge();
+        }
       }
       rankOutcome = {
         label: formatRank(rankState),
