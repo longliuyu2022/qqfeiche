@@ -4,13 +4,13 @@
 
 > 项目根目录：`/root/neon-apex`
 >
-> 当前版本：`v1.7.0`（Android `versionCode 14`）
+> 当前版本：`v1.8.0`（Android `versionCode 15`）
 >
 > 在线游戏：<https://gaokao.aiimage.icu/>
 >
 > Android 下载：[APK](https://gaokao.aiimage.icu/downloads/neon-apex-release.apk) · [AAB](https://gaokao.aiimage.icu/downloads/neon-apex-release.aab)
 
-## 当前开发版更新
+## v1.8.0 更新
 
 - 新增女声播报音色（微软 Edge 神经语音 `zh-CN-XiaoyiNeural`），设置里「播报音色」可在女声与原声之间切换，**默认女声**，切换后下一句播报即生效，无需重开游戏
 - 修复竞速冲线时误播「最后一圈！」：`_completeLap()` 原先在写入 `finished` 之前就发出 `lap` 事件，冲线那一次的快照与「刚进入最后一圈」完全一致，导致每局结束都会多播一次
@@ -23,6 +23,7 @@
 - 近道入口中心移到主路肩外，只保留约 1.6m 的路面搭接，物理触发线由 3m 提高到 6.5m，必须主动切线才能进入
 - 近道与主赛道共用护栏碰撞响应：斜擦保留沿墙速度并自动校正车头，不再顶墙停住；正面高速撞击仍保留安全重生
 - 新增账号 API、浏览器账号闭环和近道擦墙回归测试；新增语音包、钱包同步与跨浏览器金币同步测试
+- Android 版本更新为 `1.8.0 (15)`
 
 ## v1.7.0 更新
 
@@ -259,11 +260,11 @@ artifacts/apk/neon-apex-release.apk
 artifacts/aab/neon-apex-release.aab
 ```
 
-当前已部署产物（2026-08-12，`v1.7.0 (14)`）：
+当前已部署产物（2026-08-16，`v1.8.0 (15)`）：
 
 ```text
-APK SHA-256  63387b8fd152a3ae0f681187a576e4fe66c42268aad5df7d3bbf1349a3fe6605
-AAB SHA-256  b6c78c45f0fc4bd33d17929f0d26902a2fd674c0c66db37d6732a8e376e3adfe
+APK SHA-256  8a96d7e6c794e7354ed82e10e04cd58c8e17ff100bd9b3d9aaea226d8edb2d2d
+AAB SHA-256  d21bec884727f0990fbb6cbb20e3a491220bb742aff49c128bc1e8c467eede96
 证书 SHA-256 165b461910953729306cf12464a993ea300d44edb553f0f79191e44d72b43b6c
 ```
 
