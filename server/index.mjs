@@ -99,15 +99,50 @@ function secureRequest(request) {
   return request.socket.encrypted || String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
 }
 
+// Android 版把 dist 打进 APK，由 WebViewAssetLoader 以这个虚拟域名加载，因此它打到
+// 账号接口的请求必然跨源。只放行这一个已知宿主，其余跨源请求继续按 CSRF 拒绝。
+const ANDROID_ASSET_ORIGIN = 'https://appassets.androidplatform.net';
+const ALLOWED_CROSS_ORIGINS = new Set(
+  (process.env.NEON_APEX_ALLOWED_ORIGINS || ANDROID_ASSET_ORIGIN)
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean),
+);
+
+function allowedCrossOrigin(request) {
+  const origin = request.headers.origin;
+  return origin && ALLOWED_CROSS_ORIGINS.has(origin) ? origin : null;
+}
+
 function sessionCookie(request, token, maxAge = AUTH_COOKIE_MAX_AGE) {
   const value = token ? encodeURIComponent(token) : '';
-  return `${AUTH_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`
-    + (secureRequest(request) ? '; Secure' : '');
+  // 跨源宿主（Android WebView）必须用 SameSite=None 才会携带会话 Cookie；
+  // 网页版保持 Strict，不为 APK 削弱普通用户的 CSRF 防护。
+  // None 要求同时带 Secure，否则浏览器直接丢弃该 Cookie。
+  const crossOrigin = Boolean(allowedCrossOrigin(request));
+  const secure = secureRequest(request);
+  const sameSite = crossOrigin && secure ? 'None' : 'Strict';
+  return `${AUTH_COOKIE}=${value}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}`
+    + (secure ? '; Secure' : '');
+}
+
+function corsHeaders(request) {
+  const origin = allowedCrossOrigin(request);
+  if (!origin) return {};
+  return {
+    'access-control-allow-origin': origin,
+    'access-control-allow-credentials': 'true',
+    'access-control-allow-methods': 'GET, POST, PUT, OPTIONS',
+    'access-control-allow-headers': 'content-type',
+    'access-control-max-age': '600',
+    vary: 'origin',
+  };
 }
 
 function sameOriginRequest(request) {
   const origin = request.headers.origin;
   if (!origin) return true;
+  if (ALLOWED_CROSS_ORIGINS.has(origin)) return true;
   try {
     return new URL(origin).host === request.headers.host;
   } catch {
@@ -168,22 +203,28 @@ function readJsonBody(request) {
 
 async function handleAuthRequest(request, response, path) {
   if (!sameOriginRequest(request)) return json(response, 403, { error: 'CROSS_ORIGIN', message: '拒绝跨站账号请求' });
+  const cors = corsHeaders(request);
+  // 带 credentials 的跨源请求会先发预检；不放行 OPTIONS，后续请求根本发不出来。
+  if (request.method === 'OPTIONS') {
+    response.writeHead(Object.keys(cors).length ? 204 : 403, cors);
+    return response.end();
+  }
   const token = cookieValue(request, AUTH_COOKIE);
   if (path === '/multiplayer/auth/session' && request.method === 'GET') {
-    return json(response, 200, { user: authStore.authenticate(token) });
+    return json(response, 200, { user: authStore.authenticate(token) }, cors);
   }
   if (path === '/multiplayer/auth/logout' && request.method === 'POST') {
     authStore.revoke(token);
-    return json(response, 200, { user: null }, { 'set-cookie': sessionCookie(request, null, 0) });
+    return json(response, 200, { user: null }, { ...cors, 'set-cookie': sessionCookie(request, null, 0) });
   }
   if (path === '/multiplayer/auth/wallet' || path === '/multiplayer/auth/wallet/merge') {
-    return await handleWalletRequest(request, response, path, token);
+    return await handleWalletRequest(request, response, path, token, cors);
   }
   if (!['/multiplayer/auth/register', '/multiplayer/auth/login'].includes(path) || request.method !== 'POST') {
-    return json(response, 404, { error: 'not_found' });
+    return json(response, 404, { error: 'not_found' }, cors);
   }
   if (!consumeAuthAction(request)) {
-    return json(response, 429, { error: 'RATE_LIMITED', message: '尝试次数过多，请稍后再试' }, { 'retry-after': '60' });
+    return json(response, 429, { error: 'RATE_LIMITED', message: '尝试次数过多，请稍后再试' }, { ...cors, 'retry-after': '60' });
   }
   const body = await readJsonBody(request);
   const user = path.endsWith('/register')
@@ -193,30 +234,30 @@ async function handleAuthRequest(request, response, path) {
   return json(response, path.endsWith('/register') ? 201 : 200, {
     user: session.user,
     expiresAt: session.expiresAt,
-  }, { 'set-cookie': sessionCookie(request, session.token) });
+  }, { ...cors, 'set-cookie': sessionCookie(request, session.token) });
 }
 
 // 账号钱包：金币和已购道具跟着账号走，换设备登录能对上。
 // 金币始终由客户端计算（与本地游玩时一致），服务端只做字段校验和持久化。
-async function handleWalletRequest(request, response, path, token) {
+async function handleWalletRequest(request, response, path, token, cors = {}) {
   const user = authStore.authenticate(token);
-  if (!user) return json(response, 401, { error: 'NOT_SIGNED_IN', message: '请先登录车手账号' });
+  if (!user) return json(response, 401, { error: 'NOT_SIGNED_IN', message: '请先登录车手账号' }, cors);
   if (!consumeWalletAction(request)) {
-    return json(response, 429, { error: 'RATE_LIMITED', message: '操作过于频繁，请稍后再试' }, { 'retry-after': '60' });
+    return json(response, 429, { error: 'RATE_LIMITED', message: '操作过于频繁，请稍后再试' }, { ...cors, 'retry-after': '60' });
   }
   if (path === '/multiplayer/auth/wallet' && request.method === 'GET') {
-    return json(response, 200, { wallet: walletStore.get(user.id) });
+    return json(response, 200, { wallet: walletStore.get(user.id) }, cors);
   }
   if (request.method !== 'POST' && request.method !== 'PUT') {
-    return json(response, 405, { error: 'METHOD_NOT_ALLOWED', message: '不支持的请求方法' });
+    return json(response, 405, { error: 'METHOD_NOT_ALLOWED', message: '不支持的请求方法' }, cors);
   }
   const body = await readJsonBody(request);
   // merge 只在本地游客钱包首次绑定账号时调用：金币取大、道具取并集，谁也不会因为登录丢东西。
   const wallet = path.endsWith('/merge')
     ? walletStore.merge(user.id, body.wallet)
     : walletStore.put(user.id, body.wallet);
-  if (!wallet) return json(response, 503, { error: 'WALLET_UNAVAILABLE', message: '钱包服务暂不可用' });
-  return json(response, 200, { wallet });
+  if (!wallet) return json(response, 503, { error: 'WALLET_UNAVAILABLE', message: '钱包服务暂不可用' }, cors);
+  return json(response, 200, { wallet }, cors);
 }
 
 function rejectUpgrade(socket, status = 429, message = 'Too Many Requests') {

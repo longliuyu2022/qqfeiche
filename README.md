@@ -4,11 +4,20 @@
 
 > 项目根目录：`/root/neon-apex`
 >
-> 当前版本：`v1.8.0`（Android `versionCode 15`）
+> 当前版本：`v1.8.1`（Android `versionCode 16`）
 >
 > 在线游戏：<https://gaokao.aiimage.icu/>
 >
 > Android 下载：[APK](https://gaokao.aiimage.icu/downloads/neon-apex-release.apk) · [AAB](https://gaokao.aiimage.icu/downloads/neon-apex-release.aab)
+
+## v1.8.1 更新
+
+- 修复高画质与极致 3A 档整屏白屏：GTAO 的输出模式误设为 Denoise，会用环境光遮蔽图顶掉整帧画面
+- 修复好友房冲线后不结算：结算入口原先只放行排位赛，好友房要等 12 分钟超时才兜底
+- 修复 Android 版联机与账号完全连不上：APK 由 WebViewAssetLoader 以虚拟域名加载，
+  原先的地址判断只覆盖了 file: 宿主，导致请求打向不存在的 appassets.androidplatform.net
+- 新增全局运行时错误兜底与诊断信息复制，未捕获异常不再只留一片空屏
+- Android 版本更新为 `1.8.1 (16)`
 
 ## v1.8.0 更新
 
@@ -260,11 +269,11 @@ artifacts/apk/neon-apex-release.apk
 artifacts/aab/neon-apex-release.aab
 ```
 
-当前已部署产物（2026-08-16，`v1.8.0 (15)`）：
+当前已部署产物（2026-08-16，`v1.8.1 (16)`）：
 
 ```text
-APK SHA-256  8a96d7e6c794e7354ed82e10e04cd58c8e17ff100bd9b3d9aaea226d8edb2d2d
-AAB SHA-256  d21bec884727f0990fbb6cbb20e3a491220bb742aff49c128bc1e8c467eede96
+APK SHA-256  da63bfa4d9cde6e2b7d0a7a4feb3e0bd38ead2c63398717ac643e5ad0ba4b6b2
+AAB SHA-256  48523c5b1f04bd5d9bff56c65681c331cdfdc8924ff14ed852bf5d73021ec3f0
 证书 SHA-256 165b461910953729306cf12464a993ea300d44edb553f0f79191e44d72b43b6c
 ```
 

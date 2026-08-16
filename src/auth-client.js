@@ -1,4 +1,4 @@
-const AUTH_ROOT = '/multiplayer/auth';
+import { apiRoot, isCrossOrigin } from './server-origin.js';
 
 export class AuthClientError extends Error {
   constructor(message, code = 'AUTH_FAILED', status = 0) {
@@ -12,9 +12,11 @@ export class AuthClientError extends Error {
 async function authRequest(path, { method = 'GET', body } = {}) {
   let response;
   try {
-    response = await fetch(`${AUTH_ROOT}/${path}`, {
+    response = await fetch(`${apiRoot()}/${path}`, {
       method,
-      credentials: 'same-origin',
+      // Android 版从 appassets.androidplatform.net 打到线上服务端属于跨源，
+      // 'same-origin' 会让会话 Cookie 不被携带，登录态永远建立不起来。
+      credentials: isCrossOrigin() ? 'include' : 'same-origin',
       headers: body ? { 'content-type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });

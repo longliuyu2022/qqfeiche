@@ -1,3 +1,5 @@
+import { socketUrl } from './server-origin.js';
+
 const REQUEST_TIMEOUT_MS = 8000;
 const RECONNECT_WINDOW_MS = 20000;
 const PROBE_INTERVAL_MS = 4000;
@@ -12,9 +14,7 @@ export function connectionQuality(latencyMs) {
 }
 
 function defaultSocketUrl() {
-  if (!location.host || location.protocol === 'file:') return 'wss://gaokao.aiimage.icu/multiplayer';
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${location.host}/multiplayer`;
+  return socketUrl();
 }
 
 function randomPlayerId() {
