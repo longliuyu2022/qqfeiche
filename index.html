@@ -286,6 +286,26 @@
         <small>正在部署天际赛道</small>
       </div>
 
+      <div id="runtimeError" class="modal runtime-error" hidden>
+        <div class="modal-content">
+          <span class="modal-kicker">RUNTIME ERROR</span>
+          <h1>游戏加载失败</h1>
+          <p class="runtime-error-hint">赛道没能跑起来。可以先重新加载；若反复失败，请把诊断信息发给我们。</p>
+          <pre id="runtimeErrorDetail" class="runtime-error-detail"></pre>
+          <button id="runtimeErrorReload" class="primary-action" type="button">重新加载</button>
+          <button id="runtimeErrorCopy" class="secondary-action" type="button">复制诊断信息</button>
+        </div>
+      </div>
+
+      <div id="runtimeBanner" class="runtime-banner" hidden>
+        <div>
+          <b>比赛出现了一个错误</b>
+          <small id="runtimeBannerDetail"></small>
+        </div>
+        <button id="runtimeBannerCopy" type="button">复制诊断</button>
+        <button id="runtimeBannerClose" type="button" aria-label="关闭提示">×</button>
+      </div>
+
       <div id="pauseMenu" class="modal" hidden>
         <div class="modal-content">
           <span class="modal-kicker">RACE PAUSED</span>

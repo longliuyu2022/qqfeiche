@@ -1,4 +1,5 @@
 import './style.css';
+import { installErrorOverlay, recordHandled } from './error-overlay.js';
 import { RACE_MODES } from './race-modes.js';
 import { loadPreferences, savePreferences } from './preferences.js';
 import { loadRaceRecords } from './race-records.js';
@@ -11,6 +12,9 @@ import { getWalletSync } from './wallet-sync.js';
 import { createShopUi } from './shop-ui.js';
 import { createAchievementsUi } from './achievements-ui.js';
 import { getAuthSession, loginAccount, logoutAccount, registerAccount } from './auth-client.js';
+
+// 尽早接管：此后任何未捕获的异常都会有可读的界面，而不是让玩家对着空屏。
+installErrorOverlay();
 
 const ui = Object.fromEntries([
   'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeKicker', 'homeRank', 'homeCoins',
@@ -496,6 +500,7 @@ async function launchGame({ online = false } = {}) {
     ui.startRace.disabled = false;
   } catch (error) {
     console.error('Unable to load Neon Apex runtime.', error);
+    recordHandled(error, '赛道加载失败');
     delete window.__NEON_APEX_AUTOSTART__;
     window.__NEON_APEX_LOADING__ = false;
     ui.startRace.disabled = false;

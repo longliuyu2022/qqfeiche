@@ -37,6 +37,7 @@
     "test:auth-browser": "node tests/auth-browser.mjs",
     "test:wallet-browser": "node tests/wallet-browser.mjs",
     "test:voice-browser": "node tests/voice-browser.mjs",
+    "test:error-overlay": "node tests/error-overlay.mjs",
     "test:item-browser": "node tests/item-browser.mjs",
     "test:maps-browser": "node tests/maps-browser.mjs",
     "deploy:server": "bash scripts/deploy-server.sh",
