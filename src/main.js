@@ -159,7 +159,10 @@ composer?.addPass(new RenderPass(scene, camera));
 // costs more than the mobile preset can afford.
 const gtao = qualityTier === 'balanced' ? null : new GTAOPass(scene, camera, 1, 1);
 if (gtao && composer) {
-  gtao.output = GTAOPass.OUTPUT.Denoise;
+  // Default 才是"场景 + 遮蔽混合"。Denoise 会以 NoBlending 把降噪后的 AO 缓冲直接
+  // 写出去，等于丢掉整帧画面只留一张 AO 图 —— 无遮蔽处是白的，整屏就白了，
+  // 而且 blendIntensity 在那条分支里根本不参与。
+  gtao.output = GTAOPass.OUTPUT.Default;
   gtao.blendIntensity = qualityTier === 'ultra' ? 1.28 : 1.05;
   gtao.updateGtaoMaterial({
     radius: qualityTier === 'ultra' ? 3.5 : 2.6,
