@@ -6,6 +6,7 @@ import { validateRaceState } from './race-validation.mjs';
 import {
   createRankedStore, describeRank, normalizePlayerId, rankOrdinal,
 } from './ranked-store.mjs';
+import { createWalletStore } from './wallet-store.mjs';
 
 const HOST = process.env.NEON_APEX_HOST || '127.0.0.1';
 const PORT = Number(process.env.NEON_APEX_PORT || 3010);
@@ -21,6 +22,10 @@ const LOBBY_ACTION_WINDOW_MS = envInteger('NEON_APEX_LOBBY_ACTION_WINDOW_MS', 10
 const UNAUTHENTICATED_IDLE_MS = envInteger('NEON_APEX_UNAUTHENTICATED_IDLE_MS', 15000, 1000, 60000);
 const AUTH_ACTION_LIMIT = envInteger('NEON_APEX_AUTH_ACTION_LIMIT', 12, 2, 100);
 const AUTH_ACTION_WINDOW_MS = envInteger('NEON_APEX_AUTH_ACTION_WINDOW_MS', 10 * 60 * 1000, 1000, 60 * 60 * 1000);
+// 钱包单独一个桶：登录桶是按"10 分钟 12 次尝试"配的，而钱包每局结算、每次购买
+// 都要写一次，共用会把正常玩家挡在外面。
+const WALLET_ACTION_LIMIT = envInteger('NEON_APEX_WALLET_ACTION_LIMIT', 120, 10, 2000);
+const WALLET_ACTION_WINDOW_MS = envInteger('NEON_APEX_WALLET_ACTION_WINDOW_MS', 10 * 60 * 1000, 1000, 60 * 60 * 1000);
 const AUTH_BODY_BYTES = 4096;
 const AUTH_COOKIE = 'neon_apex_session';
 const AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
@@ -36,8 +41,10 @@ const rooms = new Map();
 const connectionsByIp = new Map();
 const lobbyActionsByIp = new Map();
 const authActionsByIp = new Map();
+const walletActionsByIp = new Map();
 const rankedStore = createRankedStore({ filePath: process.env.NEON_APEX_RANK_FILE || undefined });
 const authStore = createAuthStore({ filePath: process.env.NEON_APEX_AUTH_FILE || undefined });
+const walletStore = createWalletStore({ filePath: process.env.NEON_APEX_WALLET_FILE || undefined });
 
 function envInteger(name, fallback, minimum, maximum) {
   const value = Number.parseInt(process.env[name] ?? '', 10);
@@ -108,17 +115,25 @@ function sameOriginRequest(request) {
   }
 }
 
-function consumeAuthAction(request) {
+function consumeIpAction(buckets, request, limit, windowMs) {
   const now = Date.now();
   const key = clientIp(request);
-  let bucket = authActionsByIp.get(key);
-  if (!bucket || now - bucket.startedAt >= AUTH_ACTION_WINDOW_MS) {
+  let bucket = buckets.get(key);
+  if (!bucket || now - bucket.startedAt >= windowMs) {
     bucket = { startedAt: now, count: 0 };
-    authActionsByIp.set(key, bucket);
+    buckets.set(key, bucket);
   }
-  if (bucket.count >= AUTH_ACTION_LIMIT) return false;
+  if (bucket.count >= limit) return false;
   bucket.count += 1;
   return true;
+}
+
+function consumeAuthAction(request) {
+  return consumeIpAction(authActionsByIp, request, AUTH_ACTION_LIMIT, AUTH_ACTION_WINDOW_MS);
+}
+
+function consumeWalletAction(request) {
+  return consumeIpAction(walletActionsByIp, request, WALLET_ACTION_LIMIT, WALLET_ACTION_WINDOW_MS);
 }
 
 function readJsonBody(request) {
@@ -161,6 +176,9 @@ async function handleAuthRequest(request, response, path) {
     authStore.revoke(token);
     return json(response, 200, { user: null }, { 'set-cookie': sessionCookie(request, null, 0) });
   }
+  if (path === '/multiplayer/auth/wallet' || path === '/multiplayer/auth/wallet/merge') {
+    return await handleWalletRequest(request, response, path, token);
+  }
   if (!['/multiplayer/auth/register', '/multiplayer/auth/login'].includes(path) || request.method !== 'POST') {
     return json(response, 404, { error: 'not_found' });
   }
@@ -176,6 +194,29 @@ async function handleAuthRequest(request, response, path) {
     user: session.user,
     expiresAt: session.expiresAt,
   }, { 'set-cookie': sessionCookie(request, session.token) });
+}
+
+// 账号钱包：金币和已购道具跟着账号走，换设备登录能对上。
+// 金币始终由客户端计算（与本地游玩时一致），服务端只做字段校验和持久化。
+async function handleWalletRequest(request, response, path, token) {
+  const user = authStore.authenticate(token);
+  if (!user) return json(response, 401, { error: 'NOT_SIGNED_IN', message: '请先登录车手账号' });
+  if (!consumeWalletAction(request)) {
+    return json(response, 429, { error: 'RATE_LIMITED', message: '操作过于频繁，请稍后再试' }, { 'retry-after': '60' });
+  }
+  if (path === '/multiplayer/auth/wallet' && request.method === 'GET') {
+    return json(response, 200, { wallet: walletStore.get(user.id) });
+  }
+  if (request.method !== 'POST' && request.method !== 'PUT') {
+    return json(response, 405, { error: 'METHOD_NOT_ALLOWED', message: '不支持的请求方法' });
+  }
+  const body = await readJsonBody(request);
+  // merge 只在本地游客钱包首次绑定账号时调用：金币取大、道具取并集，谁也不会因为登录丢东西。
+  const wallet = path.endsWith('/merge')
+    ? walletStore.merge(user.id, body.wallet)
+    : walletStore.put(user.id, body.wallet);
+  if (!wallet) return json(response, 503, { error: 'WALLET_UNAVAILABLE', message: '钱包服务暂不可用' });
+  return json(response, 200, { wallet });
 }
 
 function rejectUpgrade(socket, status = 429, message = 'Too Many Requests') {
@@ -863,6 +904,7 @@ function shutdown(signal) {
   try {
     rankedStore.close();
     authStore.close();
+    walletStore.close();
   } finally {
     httpServer.close();
     process.exit(signal === 'SIGINT' ? 130 : 0);

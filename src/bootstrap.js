@@ -6,7 +6,8 @@ import { MultiplayerClient } from './multiplayer-client.js';
 import { TRACK_CATALOG, normalizeTrackId } from './track-catalog.js';
 import { CAR_CATALOG, getCarById } from './car-catalog.js';
 import { formatRank, getRankTier, loadRankState } from './ranked.js';
-import { isOwned, loadWallet } from './shop.js';
+import { isOwned } from './shop.js';
+import { getWalletSync } from './wallet-sync.js';
 import { createShopUi } from './shop-ui.js';
 import { createAchievementsUi } from './achievements-ui.js';
 import { getAuthSession, loginAccount, logoutAccount, registerAccount } from './auth-client.js';
@@ -17,7 +18,7 @@ const ui = Object.fromEntries([
   'startRace', 'openMultiplayer', 'openShop', 'openAchievements', 'openAccount', 'openAccountAction', 'homeAccount',
   'openSettings', 'settingsMenu', 'closeSettings', 'soundEnabled',
   'masterVolume', 'volumeValue', 'qualitySetting', 'vibrationEnabled',
-  'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'ghostEnabled',
+  'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'voicePack', 'ghostEnabled',
   'cameraShakeEnabled', 'loading', 'multiplayerMenu', 'closeMultiplayer',
   'onlineConnect', 'onlineLobby', 'onlineName', 'roomCode', 'createRoom', 'joinRoom',
   'copyRoomCode', 'onlineRoomCode', 'onlineMapName', 'onlinePlayers', 'onlineStatus',
@@ -29,7 +30,8 @@ const ui = Object.fromEntries([
 
 let preferences = loadPreferences();
 const raceRecords = loadRaceRecords();
-let wallet = loadWallet();
+const walletSync = getWalletSync();
+let wallet = walletSync.read();
 let selectedMode = preferences.lastMode;
 let selectedTrack = normalizeTrackId(preferences.lastTrack);
 let selectedCarId = getCarById(preferences.carId).id;
@@ -136,6 +138,13 @@ function renderWallet() {
   if (ui.homeCoins) ui.homeCoins.textContent = Number(wallet.coins || 0).toLocaleString('en-US');
 }
 
+// 登录拉到云端钱包、或退出回到游客钱包时，首页金币和车库解锁状态都要跟着刷新。
+walletSync.subscribe((next) => {
+  wallet = next;
+  renderWallet();
+  renderGarage();
+});
+
 function renderRankBadge() {
   if (!ui.homeRank) return;
   const rank = loadRankState();
@@ -208,6 +217,7 @@ function syncSettings() {
   ui.musicVolume.disabled = !preferences.musicEnabled;
   ui.musicVolumeValue.textContent = `${Math.round(preferences.musicVolume * 100)}%`;
   ui.voiceEnabled.checked = preferences.voiceEnabled;
+  ui.voicePack.value = preferences.voicePack;
   ui.ghostEnabled.checked = preferences.ghostEnabled;
   ui.qualitySetting.value = preferences.quality;
   ui.vibrationEnabled.checked = preferences.vibration;
@@ -290,6 +300,8 @@ async function refreshAccount() {
     accountUser = null;
   }
   renderAccount();
+  // 会话有效就把云端钱包接过来；没登录则回到本机游客钱包。
+  await (accountUser ? walletSync.signIn(accountUser) : walletSync.signOut());
   return accountUser;
 }
 
@@ -312,6 +324,7 @@ async function submitAccount() {
     ui.accountPassword.value = '';
     ui.accountConfirm.value = '';
     renderAccount();
+    await walletSync.signIn(accountUser);
     setAccountStatus(accountMode === 'register' ? '账号创建成功，已自动登录' : '登录成功', 'success');
   } catch (error) {
     setAccountStatus(error.message || '账号请求失败，请稍后重试', 'error');
@@ -326,6 +339,8 @@ async function signOutAccount() {
   setAccountBusy(true);
   setAccountStatus('正在退出…');
   try {
+    // 先把待上传的钱包推完再注销会话，否则最后一次同步会 401。
+    await walletSync.signOut();
     await logoutAccount();
     accountUser = null;
     renderAccount();
@@ -537,6 +552,7 @@ ui.masterVolume.addEventListener('input', () => applyPreferences({ masterVolume:
 ui.musicEnabled.addEventListener('change', () => applyPreferences({ musicEnabled: ui.musicEnabled.checked }));
 ui.musicVolume.addEventListener('input', () => applyPreferences({ musicVolume: Number(ui.musicVolume.value) }));
 ui.voiceEnabled.addEventListener('change', () => applyPreferences({ voiceEnabled: ui.voiceEnabled.checked }));
+ui.voicePack.addEventListener('change', () => applyPreferences({ voicePack: ui.voicePack.value }));
 ui.ghostEnabled.addEventListener('change', () => applyPreferences({ ghostEnabled: ui.ghostEnabled.checked }));
 ui.qualitySetting.addEventListener('change', () => applyPreferences({ quality: ui.qualitySetting.value }));
 ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibration: ui.vibrationEnabled.checked }));

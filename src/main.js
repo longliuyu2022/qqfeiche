@@ -16,7 +16,7 @@ import {
 import { createDetailedHeroCar } from './vehicle-assets.js';
 import { ArcadeVehicle } from './driving.js';
 import { RaceSystem } from './race-system.js';
-import { RaceAudio } from './audio.js';
+import { RaceAudio, voicePackBaseUrl } from './audio.js';
 import { createMusicSystem } from './music.js';
 import { createRuntimeMonitor } from './telemetry.js';
 import { createSpeedPostProcess } from './speed-postprocess.js';
@@ -31,7 +31,8 @@ import { DEFAULT_CAR_ID, getCarById, applyCarPhysics } from './car-catalog.js';
 import { createHeroCarVariant } from './procedural-vehicle.js';
 import { computeVehicleAnimationPose } from './vehicle-animation.js';
 import { createGhostPlayer, createGhostRecorder, serializeGhost, deserializeGhost } from './ghost.js';
-import { earnCoins, getItemById, isOwned, loadWallet, saveWallet } from './shop.js';
+import { earnCoins, getItemById, isOwned } from './shop.js';
+import { getWalletSync } from './wallet-sync.js';
 import { createShopUi } from './shop-ui.js';
 import { createAchievementsUi } from './achievements-ui.js';
 import {
@@ -197,7 +198,7 @@ const world = activeTrackRuntime.createWorld(scene, {
 const featureMeshes = buildTrackFeatureMeshes(trackFeatures, { theme: activeTrackId });
 scene.add(featureMeshes);
 const selectedCar = getCarById(preferences.carId);
-const ownedCar = isOwned(loadWallet(), selectedCar.id) ? selectedCar : getCarById(DEFAULT_CAR_ID);
+const ownedCar = isOwned(getWalletSync().read(), selectedCar.id) ? selectedCar : getCarById(DEFAULT_CAR_ID);
 // The detailed 12 MB car must never block the first rendered frame. Start with
 // the matching procedural car and upgrade it after the game is interactive.
 let hero = createHeroCarVariant(ownedCar);
@@ -316,7 +317,7 @@ const audio = new RaceAudio();
 audio.setVolume(preferences.masterVolume);
 audio.setMuted(!preferences.soundEnabled);
 audio.setVoiceEnabled(preferences.voiceEnabled);
-audio.loadVoiceBank();
+audio.loadVoiceBank(voicePackBaseUrl(preferences.voicePack));
 const music = createMusicSystem(audio);
 music.setVolume(preferences.musicVolume);
 music.setEnabled(preferences.musicEnabled);
@@ -327,7 +328,8 @@ let ghostRecorder = null;
 let ghostCar = null;
 let ghostData = null;
 let rankState = loadRankState();
-let wallet = loadWallet();
+const walletSync = getWalletSync();
+let wallet = walletSync.read();
 let achievementState = loadAchievementState();
 
 // Per-race tallies feeding the achievement checks at the finish line.
@@ -415,7 +417,7 @@ function collectUi() {
     'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeRank', 'homeCoins',
     'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'settingsMenu', 'accountMenu',
     'soundEnabled', 'masterVolume', 'volumeValue', 'qualitySetting',
-    'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'ghostEnabled',
+    'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'voicePack', 'ghostEnabled',
     'vibrationEnabled', 'cameraShakeEnabled', 'hudTrackName', 'raceFeedTitle', 'raceFeedMeta',
     'itemHud', 'itemUse', 'itemIcon', 'itemName',
     'resultRankRow', 'resultRankLabel', 'resultRankDelta',
@@ -1154,6 +1156,14 @@ const shopUi = createShopUi({
 
 const achievementsUi = createAchievementsUi({ getState: () => achievementState });
 
+// 账号钱包在别处（登录/登出/云端拉取）变化时，游戏内的金币与外观要跟着走。
+walletSync.subscribe((next) => {
+  wallet = next;
+  renderWallet();
+  applyEquippedPaint(hero, next);
+  applyEquippedGear(next);
+});
+
 let mountedWheels = null;
 let mountedSpoiler = null;
 let hornPlayer = null;
@@ -1307,6 +1317,7 @@ function syncSettingsUi() {
   ui.musicVolume.disabled = !preferences.musicEnabled;
   ui.musicVolumeValue.textContent = `${Math.round(preferences.musicVolume * 100)}%`;
   ui.voiceEnabled.checked = preferences.voiceEnabled;
+  ui.voicePack.value = preferences.voicePack;
   ui.ghostEnabled.checked = preferences.ghostEnabled;
   ui.qualitySetting.value = preferences.quality;
   ui.vibrationEnabled.checked = preferences.vibration;
@@ -1318,6 +1329,8 @@ function applyPreferences(changes) {
   audio.setVolume(preferences.masterVolume);
   audio.setMuted(!preferences.soundEnabled);
   audio.setVoiceEnabled(preferences.voiceEnabled);
+  // 同一个包会在 loadVoiceBank 内部原地返回，所以这里可以无脑调用。
+  audio.loadVoiceBank(voicePackBaseUrl(preferences.voicePack));
   music.setVolume(preferences.musicVolume);
   music.setEnabled(preferences.musicEnabled && !paused);
   qualityTier = resolveQualityTier(detectedQualityTier);
@@ -1627,6 +1640,7 @@ ui.masterVolume.addEventListener('input', () => applyPreferences({ masterVolume:
 ui.musicEnabled.addEventListener('change', () => applyPreferences({ musicEnabled: ui.musicEnabled.checked }));
 ui.musicVolume.addEventListener('input', () => applyPreferences({ musicVolume: Number(ui.musicVolume.value) }));
 ui.voiceEnabled.addEventListener('change', () => applyPreferences({ voiceEnabled: ui.voiceEnabled.checked }));
+ui.voicePack.addEventListener('change', () => applyPreferences({ voicePack: ui.voicePack.value }));
 ui.ghostEnabled.addEventListener('change', () => applyPreferences({ ghostEnabled: ui.ghostEnabled.checked }));
 ui.qualitySetting.addEventListener('change', () => applyPreferences({ quality: ui.qualitySetting.value }));
 ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibration: ui.vibrationEnabled.checked }));
@@ -1843,7 +1857,7 @@ raceSystem.on('finish', async (result) => {
   }, Date.now());
   if (payout) {
     wallet = payout.wallet;
-    saveWallet(wallet);
+    walletSync.persist(wallet);
   }
   const achievementOutcome = isOnline ? null : evaluateAchievements(achievementState, {
     mode: activeMode,
@@ -1869,7 +1883,7 @@ raceSystem.on('finish', async (result) => {
     saveAchievementState(achievementState);
     if (achievementOutcome.coinReward > 0) {
       wallet = { ...wallet, coins: wallet.coins + achievementOutcome.coinReward };
-      saveWallet(wallet);
+      walletSync.persist(wallet);
     }
     for (const [index, unlocked] of (achievementOutcome.newlyUnlocked ?? []).entries()) {
       setTimeout(() => showCallout(`成就达成：${unlocked.name ?? unlocked.id}`, 1.6), 2600 + index * 1500);

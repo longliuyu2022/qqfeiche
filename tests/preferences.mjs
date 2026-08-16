@@ -23,6 +23,7 @@ const saved = savePreferences({
   musicEnabled: false,
   musicVolume: -1,
   voiceEnabled: false,
+  voicePack: 'classic',
   ghostEnabled: false,
   quality: 'balanced',
   vibration: false,
@@ -37,6 +38,7 @@ assert.deepEqual(saved, {
   musicEnabled: false,
   musicVolume: 0,
   voiceEnabled: false,
+  voicePack: 'classic',
   ghostEnabled: false,
   quality: 'balanced',
   vibration: false,
@@ -53,6 +55,10 @@ assert.equal(normalizePreferences({ carId: 'unknown-car' }).carId, 'volt');
 assert.equal(normalizePreferences({ musicVolume: 'loud' }).musicVolume, 0.5);
 assert.equal(normalizePreferences({}).voiceEnabled, true);
 assert.equal(normalizePreferences({}).ghostEnabled, true);
+// 播报音色默认女声：老存档没有这个字段，归一化后也要落到女声。
+assert.equal(normalizePreferences({}).voicePack, 'female');
+assert.equal(normalizePreferences({ voicePack: 'classic' }).voicePack, 'classic');
+assert.equal(normalizePreferences({ voicePack: 'nope' }).voicePack, 'female');
 
 storage.setItem(PREFERENCES_KEY, '{broken');
 assert.deepEqual(loadPreferences(storage), DEFAULT_PREFERENCES);

@@ -1,3 +1,16 @@
+export const DEFAULT_VOICE_PACK = 'female';
+
+// 播报音色包。键要和 preferences.js 的 VOICE_PACK_OPTIONS 保持一致，
+// 每个目录下都是同一套 clip 键名（见 scripts/generate-voice-pack.py）。
+export const VOICE_PACKS = Object.freeze({
+  female: '/assets/audio/voice-female/',
+  classic: '/assets/audio/voice/',
+});
+
+export function voicePackBaseUrl(pack) {
+  return VOICE_PACKS[pack] || VOICE_PACKS[DEFAULT_VOICE_PACK];
+}
+
 export class RaceAudio {
   constructor() {
     this.context = null;
@@ -12,7 +25,7 @@ export class RaceAudio {
     this.muted = false;
     this.voiceGain = null;
     this.voiceEnabled = true;
-    this.voiceBaseUrl = '/assets/audio/voice/';
+    this.voiceBaseUrl = voicePackBaseUrl(DEFAULT_VOICE_PACK);
     this.voiceManifest = null;
     this.voiceBuffers = new Map();
     this.voiceData = new Map();
@@ -20,6 +33,8 @@ export class RaceAudio {
     this.voiceFailed = new Set();
     this.voicePlaying = new Map();
     this._voiceReady = false;
+    // 每换一次音色包自增，用来作废上一包的在途请求。
+    this._voiceBankToken = 0;
   }
 
   async start() {
@@ -123,22 +138,44 @@ export class RaceAudio {
     return this._voiceReady;
   }
 
-  async loadVoiceBank(baseUrl = '/assets/audio/voice/') {
+  async loadVoiceBank(baseUrl = voicePackBaseUrl(DEFAULT_VOICE_PACK)) {
+    const raw = String(baseUrl || voicePackBaseUrl(DEFAULT_VOICE_PACK));
+    const base = raw.endsWith('/') ? raw : `${raw}/`;
+    // applyPreferences 会被音量滑杆的 input 事件连续触发，同一个包必须原地返回，
+    // 否则拖一次音量就会把 manifest 和 13 条音频重新拉一遍。
+    if (base === this.voiceBaseUrl && (this._voiceReady || this.voiceLoading.size)) return this._voiceReady;
+    if (base !== this.voiceBaseUrl) this._resetVoiceBank();
+    this.voiceBaseUrl = base;
+    const token = (this._voiceBankToken += 1);
     try {
-      const base = String(baseUrl || '/assets/audio/voice/');
-      this.voiceBaseUrl = base.endsWith('/') ? base : `${base}/`;
-      const response = await fetch(`${this.voiceBaseUrl}manifest.json`);
+      const response = await fetch(`${base}manifest.json`);
       if (!response.ok) return false;
       const manifest = await response.json();
       const clips = manifest && manifest.clips && typeof manifest.clips === 'object' ? manifest.clips : null;
       if (!clips) return false;
+      // 拉取期间玩家又切了音色，这份结果已经过期。
+      if (token !== this._voiceBankToken) return false;
       this.voiceManifest = clips;
       this._voiceReady = true;
-      for (const name of Object.keys(clips)) this._loadVoiceClip(name);
+      for (const name of Object.keys(clips)) this._loadVoiceClip(name, token);
       return true;
     } catch (error) {
       return false;
     }
+  }
+
+  // 切包时清空所有解码缓存：clip 键名两包相同，留着旧 buffer 会串音。
+  _resetVoiceBank() {
+    if (this.context) {
+      const now = this.context.currentTime;
+      for (const name of [...this.voicePlaying.keys()]) this._stopVoicePlayback(name, now);
+    }
+    this.voiceManifest = null;
+    this._voiceReady = false;
+    this.voiceBuffers.clear();
+    this.voiceData.clear();
+    this.voiceFailed.clear();
+    this.voiceLoading.clear();
   }
 
   voice(name, { volume = 1 } = {}) {
@@ -207,35 +244,47 @@ export class RaceAudio {
     for (const name of [...this.voiceData.keys()]) this._loadVoiceClip(name);
   }
 
-  async _loadVoiceClip(name) {
+  async _loadVoiceClip(name, token = this._voiceBankToken) {
     if (this.voiceBuffers.has(name)) return this.voiceBuffers.get(name);
     const entry = this.voiceManifest ? this.voiceManifest[name] : null;
     if (!entry || !entry.file || this.voiceFailed.has(name) || this.voiceLoading.has(name)) return null;
+    // 整个流程都用发起时的 base 和 token：中途换包的话这份结果一律丢弃，
+    // 否则旧音色的音频会被写进新包的缓存。
+    const base = this.voiceBaseUrl;
     this.voiceLoading.add(name);
     try {
       if (!this.voiceData.has(name)) {
-        const response = await fetch(this.voiceBaseUrl + entry.file);
+        const response = await fetch(base + entry.file);
+        if (token !== this._voiceBankToken) return null;
         if (!response.ok) {
           this.voiceFailed.add(name);
           return null;
         }
-        this.voiceData.set(name, await response.arrayBuffer());
+        const encoded = await response.arrayBuffer();
+        if (token !== this._voiceBankToken) return null;
+        this.voiceData.set(name, encoded);
       }
       if (!this.context) return null;
       try {
-        const buffer = await this.context.decodeAudioData(this.voiceData.get(name).slice(0));
+        const pending = this.voiceData.get(name);
+        if (!pending) return null;
+        const buffer = await this.context.decodeAudioData(pending.slice(0));
+        if (token !== this._voiceBankToken) return null;
         this.voiceBuffers.set(name, buffer);
         this.voiceData.delete(name);
         return buffer;
       } catch (error) {
-        this.voiceFailed.add(name);
-        this.voiceData.delete(name);
+        if (token === this._voiceBankToken) {
+          this.voiceFailed.add(name);
+          this.voiceData.delete(name);
+        }
         return null;
       }
     } catch (error) {
       return null;
     } finally {
-      this.voiceLoading.delete(name);
+      // 换过包的话 _resetVoiceBank 已经清过表，再删会误伤新包同名 clip 的在途标记。
+      if (token === this._voiceBankToken) this.voiceLoading.delete(name);
     }
   }
 

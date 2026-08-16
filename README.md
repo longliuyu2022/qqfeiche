@@ -12,13 +12,17 @@
 
 ## 当前开发版更新
 
+- 新增女声播报音色（微软 Edge 神经语音 `zh-CN-XiaoyiNeural`），设置里「播报音色」可在女声与原声之间切换，**默认女声**，切换后下一句播报即生效，无需重开游戏
+- 修复竞速冲线时误播「最后一圈！」：`_completeLap()` 原先在写入 `finished` 之前就发出 `lap` 事件，冲线那一次的快照与「刚进入最后一圈」完全一致，导致每局结束都会多播一次
+- 金币、已购道具与装备改为跟随账号跨设备同步：登录后从服务端拉取，比赛结算与商店购买自动上传；本机游客钱包在首次绑定账号时按「金币取大、道具取并集」合并，登出后回到本机游客钱包
+- 服务端新增账号钱包持久化（`server/wallet-store.mjs`，原子写入 `data/wallets.json`），并对空钱包覆盖做防清零保护；离线或服务不可用时照常用本地存档游玩
 - 新增车手账号系统：首页支持用户名与自定义密码注册、登录、刷新后会话恢复和退出登录；游客模式继续保留
 - 密码只在服务端使用 `scrypt` + 独立随机盐保存，登录态使用 `HttpOnly`、`SameSite=Strict` Cookie；账号接口包含同源校验、请求体上限和 IP 频率限制
 - 登录账号成为在线排位的服务端身份，同一账号在不同设备使用同一用户名与段位，不再依赖单设备匿名 ID
 - 账号与会话数据原子写入独立持久化目录 `/opt/neon-apex/multiplayer/data`，联机服务原子换版不会清空账号
 - 近道入口中心移到主路肩外，只保留约 1.6m 的路面搭接，物理触发线由 3m 提高到 6.5m，必须主动切线才能进入
 - 近道与主赛道共用护栏碰撞响应：斜擦保留沿墙速度并自动校正车头，不再顶墙停住；正面高速撞击仍保留安全重生
-- 新增账号 API、浏览器账号闭环和近道擦墙回归测试
+- 新增账号 API、浏览器账号闭环和近道擦墙回归测试；新增语音包、钱包同步与跨浏览器金币同步测试
 
 ## v1.7.0 更新
 
@@ -142,15 +146,15 @@
 - 改装商店：金币结算，车辆/车漆/贴花/轮毂/尾翼/喇叭六类共 26 件商品
 - 成就系统：20 条成就与金币奖励
 - 快速排位联机：按段位匹配，服务端结算段位分
-- 车手账号：用户名/密码注册登录、跨设备会话和账号绑定在线段位
-- 影子挑战幽灵回放、本地排位段位、程序化 BGM 与中文播报语音
+- 车手账号：用户名/密码注册登录、跨设备会话、账号绑定在线段位，金币与已购道具跨设备同步
+- 影子挑战幽灵回放、本地排位段位、程序化 BGM 与中文播报语音（女声/原声双音色）
 - 2–6 人房间码联机好友赛，包含同步发车、实时车辆状态、排名和断线恢复
 - 6 车同场竞速，包含 AI 超车、封堵和动态车道策略
 - 街机驾驶手感：加速、制动、倒车、转向、漂移和氮气加速
 - 漂移积分、连击倍率、漂移氮气充能、氮气衔接以及错误路线重生
 - 道具箱、氮气瓶、能量盾、电磁脉冲、冲击波、追踪导弹、香蕉皮、水炸弹和名次加权发放
 - 分模式保存最佳总时间、计时赛纪录、漂移最高分、最佳圈速和胜场
-- 持久化声音、音乐、播报、幽灵、音量、画质、触感反馈、镜头震动、车型和上次赛事模式
+- 持久化声音、音乐、播报、播报音色、幽灵、音量、画质、触感反馈、镜头震动、车型和上次赛事模式
 - 五张独立地图：夜港、晴川、雪岭极光、赤砂峡谷和蔚蓝海岸
 - 三张新地图包含独立路线、PBR 路面、程序化地形、动态天气/水面和大型地标
 - 动态追尾镜头、胎痕烟雾火花、速度线、粒子、Bloom、GTAO、SMAA 和基于速度的后处理
@@ -320,20 +324,23 @@ neon-apex/
 │   ├── track-catalog.js       # 首页与运行时共享的地图信息
 │   ├── multiplayer-client.js  # 房间连接、同步与断线恢复
 │   ├── auth-client.js         # 同源账号 API 与 HttpOnly 会话客户端
+│   ├── wallet-sync.js         # 账号钱包跨设备同步与离线降级
 │   ├── vehicle-assets.js      # 主车模型加载与程序化备用车
 │   ├── speed-postprocess.js   # 高速径向模糊后处理
-│   ├── audio.js               # 引擎、漂移、氮气音效与播报语音
-│   ├── preferences.js         # 画质、音量、车型与反馈设置持久化
+│   ├── audio.js               # 引擎、漂移、氮气音效与播报语音（女声/原声双音色）
+│   ├── preferences.js         # 画质、音量、车型、播报音色与反馈设置持久化
 │   ├── race-records.js        # 分模式本地比赛纪录与幽灵存档
 │   ├── telemetry.js           # WebGL 性能与错误监控
 │   └── style.css              # HUD、车库和响应式触控布局
 ├── public/assets/             # 车辆、地图封面、HDRI、PBR 材质与播报语音资源
+│   └── audio/                 # voice/（原声）与 voice-female/（女声）两套播报
 ├── tests/                     # 逻辑、触控和 Playwright 视觉测试
 ├── server/                    # 2–6 人房间和 WebSocket 状态服务
 │   ├── auth-store.mjs         # scrypt 密码、账号和哈希会话持久化
 │   ├── race-validation.mjs    # 联机进度、位置和完赛校验
+│   ├── wallet-store.mjs       # 账号钱包持久化与合并/防清零
 │   └── ranked-store.mjs       # 服务端段位分持久化
-├── scripts/                   # APK 构建与线上部署脚本
+├── scripts/                   # APK 构建、线上部署与播报语音生成脚本
 ├── android/                   # 原生 Android 工程、正式签名配置和启动器图标引用
 ├── dist/                      # Vite 生产构建（可再生成）
 └── artifacts/                 # 截图与 APK 成品
@@ -345,16 +352,34 @@ neon-apex/
 
 主车辆使用 Khronos glTF Sample Assets 的 **Car Concept**，遵循 CC BY 4.0。环境材质来自 Poly Haven。具体来源、许可和文件校验信息见 [`public/assets/ASSET-LICENSES.md`](public/assets/ASSET-LICENSES.md)。主车辆加载失败时，游戏会自动切换到程序化备用车辆。
 
+### 播报语音
+
+两套音色各 13 条 clip，键名完全一致，缺一条就会让那句播报静音（`tests/voice.mjs` 会守住这一点）：
+
+- `public/assets/audio/voice/`（原声，MiMo TTS 生成）
+- `public/assets/audio/voice-female/`（女声，微软 Edge 神经语音 `zh-CN-XiaoyiNeural`）
+
+女声包由 [`scripts/generate-voice-pack.py`](scripts/generate-voice-pack.py) 生成，产物已入库，日常构建与测试都不依赖 Python。只有在增删播报条目或想换音色时才需要重跑：
+
+```bash
+python3 -m venv /tmp/ttsenv && /tmp/ttsenv/bin/pip install edge-tts
+/tmp/ttsenv/bin/python scripts/generate-voice-pack.py                 # 全量重生成
+/tmp/ttsenv/bin/python scripts/generate-voice-pack.py --only go       # 只返工某几条
+/tmp/ttsenv/bin/python scripts/generate-voice-pack.py --voice zh-CN-XiaoxiaoNeural --out public/assets/audio/voice-xiaoxiao
+```
+
+脚本会切掉首尾静音并把响度归一到 -15 LUFS（与原声包实测均值一致），保证玩家切换音色时音量不跳。新增音色包还需要在 `src/audio.js` 的 `VOICE_PACKS`、`src/preferences.js` 的 `VOICE_PACK_OPTIONS` 和 `index.html` 的下拉里各登记一项。
+
 ## 持续集成
 
 GitHub Actions 工作流 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在推送到 `main` 和所有 Pull Request 上触发，使用 Node.js 20 依次执行：
 
 1. `npm ci` 按 `package-lock.json` 安装依赖（带 npm 缓存）
-2. `npm test` 跑完 20 套纯 Node 逻辑测试（赛制、账号、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
+2. `npm test` 跑完 22 套纯 Node 逻辑测试（赛制、账号、钱包同步、语音包、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
 3. `npm run build` 生产构建
 4. 校验构建产物：`dist/index.html` 以及 `dist/assets` 下的 `.js` 与 `.css` 均存在且非空
 
-CI **不运行**浏览器测试（`test:visual`、`test:maps-browser`、`test:item-browser`、`test:online-browser`、`test:performance`、`test:sections`）。它们需要本机 Chromium（`/usr/local/bin/chromium-browser`，可用 `CHROMIUM_PATH` 覆盖）外加一个 `vite preview` 服务器，在 CI 的软件渲染环境下单次运行可能长达数十分钟，既会撞上 job 超时，也容易因渲染差异产生假失败。这些测试保留为本地和发布前的人工回归手段。Job 超时设为 20 分钟，同分支的新提交会自动取消仍在运行的旧任务。
+CI **不运行**浏览器测试（`test:visual`、`test:maps-browser`、`test:item-browser`、`test:online-browser`、`test:auth-browser`、`test:wallet-browser`、`test:voice-browser`、`test:performance`、`test:sections`）。它们需要本机 Chromium（`/usr/local/bin/chromium-browser`，可用 `CHROMIUM_PATH` 覆盖）外加一个 `vite preview` 服务器，在 CI 的软件渲染环境下单次运行可能长达数十分钟，既会撞上 job 超时，也容易因渲染差异产生假失败。这些测试保留为本地和发布前的人工回归手段。Job 超时设为 20 分钟，同分支的新提交会自动取消仍在运行的旧任务。
 
 ### 部署前预检
 

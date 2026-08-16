@@ -1,0 +1,56 @@
+{
+  "clips": {
+    "countdown_3": {
+      "file": "countdown_3.mp3",
+      "duration": 0.42
+    },
+    "countdown_2": {
+      "file": "countdown_2.mp3",
+      "duration": 0.26
+    },
+    "countdown_1": {
+      "file": "countdown_1.mp3",
+      "duration": 0.26
+    },
+    "go": {
+      "file": "go.mp3",
+      "duration": 0.42
+    },
+    "perfect_start": {
+      "file": "perfect_start.mp3",
+      "duration": 0.65
+    },
+    "double_boost": {
+      "file": "double_boost.mp3",
+      "duration": 0.44
+    },
+    "chain_boost": {
+      "file": "chain_boost.mp3",
+      "duration": 0.42
+    },
+    "landing_boost": {
+      "file": "landing_boost.mp3",
+      "duration": 0.52
+    },
+    "new_record": {
+      "file": "new_record.mp3",
+      "duration": 0.55
+    },
+    "final_lap": {
+      "file": "final_lap.mp3",
+      "duration": 0.63
+    },
+    "overtake": {
+      "file": "overtake.mp3",
+      "duration": 0.84
+    },
+    "finish_first": {
+      "file": "finish_first.mp3",
+      "duration": 0.63
+    },
+    "rank_up": {
+      "file": "rank_up.mp3",
+      "duration": 0.42
+    }
+  }
+}

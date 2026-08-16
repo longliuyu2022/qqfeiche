@@ -38,6 +38,39 @@ assert.equal(lapEvents, 2, 'each valid checkpoint sequence should complete one l
 assert.equal(checkpointCar.state.raceStatus, 'finished');
 assert.equal(checkpointCar.result.status, 'finished');
 
+// 冲线那一次同样会发 lap 事件，但快照必须已经写好 finished。否则它和"刚进入最后
+// 一圈"完全一样（lap 都被 clamp 到 totalLaps），main.js 会在每局结束时再误播一次
+// "最后一圈！"。
+const announceCar = new ArcadeVehicle({
+  trackCurve: curve,
+  trackWidth: 16,
+  totalLaps: 3,
+  checkpointCount: 12,
+});
+const lapSnapshots = [];
+announceCar.on('lap', (state) => { lapSnapshots.push(state); });
+announceCar.startRace();
+moveAlongCurve(announceCar, 3);
+assert.equal(lapSnapshots.length, 3, 'every completed lap should emit exactly one lap event');
+assert.equal(lapSnapshots.at(-1).finished, true, 'the finish-line lap must already report the race as finished');
+assert.equal(lapSnapshots.at(-1).lapsCompleted, 3);
+// 与 src/main.js 里驱动"最后一圈！"播报的条件保持一致。
+const finalLapCallouts = lapSnapshots.filter(
+  (state) => !state.finished && state.totalLaps > 1 && state.lap === state.totalLaps,
+);
+assert.equal(finalLapCallouts.length, 1, 'the final-lap callout must fire exactly once per race');
+assert.equal(finalLapCallouts[0].lapsCompleted, 2, 'it belongs to entering the last lap, not to crossing the line');
+// 单圈赛没有"最后一圈"可言，冲线时也不该冒出任何圈数提示。
+const sprintCar = new ArcadeVehicle({
+  trackCurve: curve, trackWidth: 16, totalLaps: 1, checkpointCount: 12,
+});
+const sprintSnapshots = [];
+sprintCar.on('lap', (state) => { sprintSnapshots.push(state); });
+sprintCar.startRace();
+moveAlongCurve(sprintCar, 1);
+assert.equal(sprintSnapshots.length, 1);
+assert.equal(sprintSnapshots[0].finished, true, 'a one-lap race finishes on its only lap event');
+
 const shortcutCar = new ArcadeVehicle({ trackCurve: curve, trackWidth: 16, checkpointCount: 12 });
 shortcutCar.startRace();
 shortcutCar.position.copy(curve.getPointAt(0.25));

@@ -1572,9 +1572,15 @@ export class ArcadeVehicle {
       : Math.min(this.state.bestLapTime, this.state.lastLapTime);
     this.state.currentLapTime = 0;
     this.state.lap = Math.min(this.state.totalLaps, this.state.lapsCompleted + 1);
-    this._emit('lap', this.getSnapshot());
 
-    if (this.state.lapsCompleted < this.state.totalLaps) return;
+    // 终点线那一次也是一次完整的圈，但快照必须先落定 finished，否则它和"刚进入
+    // 最后一圈"长得一模一样（lap 都被 clamp 到 totalLaps），监听方会误播最后一圈。
+    const raceComplete = this.state.lapsCompleted >= this.state.totalLaps;
+    if (!raceComplete) {
+      this._emit('lap', this.getSnapshot());
+      return;
+    }
+
     this.state.finished = true;
     this.state.raceStatus = 'finished';
     this.state.lap = this.state.totalLaps;
@@ -1593,6 +1599,7 @@ export class ArcadeVehicle {
       shortcutStrikes: this.state.shortcutStrikes,
       cleanRace: this.state.respawnCount === 0 && this.state.collisionCount === 0 && this.state.shortcutStrikes === 0,
     };
+    this._emit('lap', this.getSnapshot());
     this._emit('finish', this.getSnapshot());
   }
 

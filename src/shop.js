@@ -427,22 +427,22 @@ export function equip(wallet, itemId) {
   };
 }
 
-export function loadWallet(storage) {
+export function loadWallet(storage, key = WALLET_KEY) {
   const target = storage === undefined ? defaultStorage() : storage;
   if (!target?.getItem) return createDefaultWallet();
   try {
-    const stored = target.getItem(WALLET_KEY);
+    const stored = target.getItem(key);
     return stored ? normalizeWallet(JSON.parse(stored)) : createDefaultWallet();
   } catch {
     return createDefaultWallet();
   }
 }
 
-export function saveWallet(wallet, storage) {
+export function saveWallet(wallet, storage, key = WALLET_KEY) {
   const target = storage === undefined ? defaultStorage() : storage;
   if (!target?.setItem) return false;
   try {
-    target.setItem(WALLET_KEY, JSON.stringify(normalizeWallet(wallet)));
+    target.setItem(key, JSON.stringify(normalizeWallet(wallet)));
     return true;
   } catch {
     return false;

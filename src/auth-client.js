@@ -52,3 +52,17 @@ export async function loginAccount({ username, password }) {
 export async function logoutAccount() {
   return authRequest('logout', { method: 'POST' });
 }
+
+export async function fetchAccountWallet() {
+  return authRequest('wallet');
+}
+
+// 整份上传，服务端做字段校验后覆盖。
+export async function pushAccountWallet(wallet) {
+  return authRequest('wallet', { method: 'PUT', body: { wallet } });
+}
+
+// 本地游客钱包首次绑定账号时用：金币取大、道具取并集。
+export async function mergeAccountWallet(wallet) {
+  return authRequest('wallet/merge', { method: 'POST', body: { wallet } });
+}

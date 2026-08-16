@@ -4,10 +4,9 @@ import {
   getItemById,
   isOwned,
   itemsByCategory,
-  loadWallet,
   purchase,
-  saveWallet,
 } from './shop.js';
+import { getWalletSync } from './wallet-sync.js';
 import { getCarById } from './car-catalog.js';
 
 const CATEGORY_LABELS = Object.freeze({
@@ -55,9 +54,10 @@ export function createShopUi({ onChange, getWallet, setWallet } = {}) {
   let category = 'car';
   let statusTimer = 0;
 
-  const readWallet = () => getWallet?.() ?? loadWallet();
+  const readWallet = () => getWallet?.() ?? getWalletSync().read();
   const writeWallet = (wallet) => {
-    saveWallet(wallet);
+    // 落本地并排队同步到账号，登录时购买/装备才能跨设备生效。
+    getWalletSync().persist(wallet);
     setWallet?.(wallet);
     onChange?.(wallet);
   };

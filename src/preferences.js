@@ -6,6 +6,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   musicEnabled: true,
   musicVolume: 0.5,
   voiceEnabled: true,
+  voicePack: 'female',
   ghostEnabled: true,
   quality: 'auto',
   vibration: true,
@@ -16,6 +17,8 @@ export const DEFAULT_PREFERENCES = Object.freeze({
 });
 
 const QUALITY_OPTIONS = new Set(['auto', 'balanced', 'high', 'ultra']);
+// 与 audio.js 的 VOICE_PACKS 键一一对应。
+const VOICE_PACK_OPTIONS = new Set(['female', 'classic']);
 const MODE_OPTIONS = new Set(['race', 'items', 'timeTrial', 'drift']);
 const TRACK_OPTIONS = new Set(['night', 'day', 'alpine', 'canyon', 'coast']);
 const CAR_OPTIONS = new Set(['volt', 'raiden', 'nimbus', 'goliath']);
@@ -40,6 +43,7 @@ export function normalizePreferences(value = {}) {
     musicEnabled: typeof value?.musicEnabled === 'boolean' ? value.musicEnabled : DEFAULT_PREFERENCES.musicEnabled,
     musicVolume: normalizeVolume(value?.musicVolume, DEFAULT_PREFERENCES.musicVolume),
     voiceEnabled: typeof value?.voiceEnabled === 'boolean' ? value.voiceEnabled : DEFAULT_PREFERENCES.voiceEnabled,
+    voicePack: VOICE_PACK_OPTIONS.has(value?.voicePack) ? value.voicePack : DEFAULT_PREFERENCES.voicePack,
     ghostEnabled: typeof value?.ghostEnabled === 'boolean' ? value.ghostEnabled : DEFAULT_PREFERENCES.ghostEnabled,
     quality: QUALITY_OPTIONS.has(value?.quality) ? value.quality : DEFAULT_PREFERENCES.quality,
     vibration: typeof value?.vibration === 'boolean' ? value.vibration : DEFAULT_PREFERENCES.vibration,
