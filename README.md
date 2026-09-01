@@ -451,7 +451,7 @@ python3 -m venv /tmp/ttsenv && /tmp/ttsenv/bin/pip install edge-tts
 GitHub Actions 工作流 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在推送到 `main` 和所有 Pull Request 上触发，使用 Node.js 20 依次执行：
 
 1. `npm ci` 按 `package-lock.json` 安装依赖（带 npm 缓存）
-2. `npm test` 跑完 33 套纯 Node 逻辑测试（赛制、卡丁碰撞、联机卡丁、联机金币、歌单、挑战、训练、导航、账号、钱包同步、语音包、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
+2. `npm test` 跑完 35 套纯 Node 逻辑测试（赛制、卡丁碰撞、联机卡丁、联机金币、歌单、挑战、训练、导航、账号、钱包同步、语音包、纪录、赛道、地形、环境流式加载、幽灵、段位、联机排位、商店、道具、联机、触控、键盘等）
 3. `npm run build` 生产构建
 4. 校验构建产物：`dist/index.html` 以及 `dist/assets` 下的 `.js` 与 `.css` 均存在且非空
 

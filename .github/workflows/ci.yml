@@ -35,7 +35,8 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
-      - name: 逻辑测试（15 套纯 Node 测试）
+      # 具体套数以 package.json 的 test 脚本为准，这里不写死数字免得再次过期。
+      - name: 逻辑测试（纯 Node）
         run: npm test
 
       # 说明：这里刻意不运行浏览器测试
