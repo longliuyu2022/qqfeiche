@@ -1,0 +1,12 @@
+{
+  "tracks": [
+    { "file": "track-01-tik-tok.mp3", "title": "Tik Tok" },
+    { "file": "track-02-insomnia.mp3", "title": "Insomnia" },
+    { "file": "track-03-gee.mp3", "title": "Gee" },
+    { "file": "track-04-in-the-end.mp3", "title": "In the End" },
+    { "file": "track-05-numb.mp3", "title": "Numb" },
+    { "file": "track-06-never-say-goodbye.mp3", "title": "Never Say Good Bye" },
+    { "file": "track-07-juk-eul-man-keum.mp3", "title": "죽을 만큼 아파서" },
+    { "file": "track-08-loves-me-not-live.mp3", "title": "Loves me not (现场版)" }
+  ]
+}

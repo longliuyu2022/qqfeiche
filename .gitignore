@@ -24,3 +24,9 @@ server/data/*.json
 *.jks
 *.keystore
 signing.properties
+
+# 比赛歌单音频：再分发授权未确认，只留本地并在部署时单独投放服务器。
+# manifest.json 与 README.md 仍入库，歌单配置保持版本管理。
+public/assets/audio/music/*.mp3
+public/assets/audio/music/*.ogg
+public/assets/audio/music/*.m4a
