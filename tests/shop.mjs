@@ -11,6 +11,7 @@ import {
   itemsByCategory,
   loadWallet,
   normalizeWallet,
+  onlineRaceReward,
   purchase,
   saveWallet,
 } from '../src/shop.js';
@@ -635,6 +636,35 @@ assert.deepEqual(session, {
 assert.equal(saveWallet(session, storage), true);
 assert.deepEqual(loadWallet(storage), session);
 
+// --- 联机奖励 -------------------------------------------------------------
+// 服务端权威口径：只按「完赛底薪 + 名次」发钱并打 6 折，不含技巧分 / 净胜 /
+// 破纪录（这三项来自客户端自报，联机采信就是刷钱口子）。
+const onlineFirst = onlineRaceReward({ position: 1, totalRacers: 6, finished: true });
+const onlineLast = onlineRaceReward({ position: 6, totalRacers: 6, finished: true });
+assert.equal(onlineFirst, 252, '6 人房第一名 = (120 底薪 + 300 名次) × 0.6');
+assert.equal(onlineLast, 84, '6 人房末位 = (120 + 20) × 0.6');
+// 名次越靠前奖励越高，且严格单调。
+let previousReward = Number.POSITIVE_INFINITY;
+for (let position = 1; position <= 6; position += 1) {
+  const reward = onlineRaceReward({ position, totalRacers: 6, finished: true });
+  assert.ok(reward < previousReward, `第 ${position} 名的奖励应低于上一名`);
+  previousReward = reward;
+}
+// 门禁：未完赛、被判无效、单人房一律 0。
+assert.equal(onlineRaceReward({ position: 1, totalRacers: 6, finished: false }), 0, '未完赛不发钱');
+assert.equal(onlineRaceReward({ position: 1, totalRacers: 6, finished: true, settled: false }), 0, '状态无效不发钱');
+assert.equal(onlineRaceReward({ position: 1, totalRacers: 1, finished: true }), 0, '单人房不发钱');
+assert.equal(onlineRaceReward({}), 0, '空参数不发钱');
+// 脏名次按末位处理，不能白拿冠军奖励。
+assert.equal(onlineRaceReward({ position: 0, totalRacers: 6, finished: true }), onlineLast);
+assert.equal(onlineRaceReward({ position: 999, totalRacers: 6, finished: true }), onlineLast);
+assert.equal(onlineRaceReward({ position: 'abc', totalRacers: 6, finished: true }), onlineLast);
+// 联机第一名必须低于同名次的单机收益，避免联机成为刷钱捷径。
+const soloFirst = earnCoins(createDefaultWallet(), {
+  mode: 'race', position: 1, entrants: 6, cleanRace: true, skillScore: 30000, isNewRecord: true,
+}).earned;
+assert.ok(onlineFirst < soloFirst, '联机奖励应低于单机满配收益');
+
 console.log(JSON.stringify({
   catalog: 'ok',
   gearCatalog: `${wheels.length}/${spoilers.length}/${horns.length}`,
@@ -650,4 +680,6 @@ console.log(JSON.stringify({
   storageRoundTrip: 'ok',
   immutability: 'ok',
   podiumPayout: podium.earned,
+  onlineReward: `${onlineFirst}/${onlineLast}`,
+  onlineGates: 'ok',
 }));

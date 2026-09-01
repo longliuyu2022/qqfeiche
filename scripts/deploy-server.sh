@@ -56,13 +56,24 @@ node --input-type=module --eval "
   import { createAuthStore } from '${STAGE_DIR}/auth-store.mjs';
   import { createWalletStore } from '${STAGE_DIR}/wallet-store.mjs';
   import { validateRaceState } from '${STAGE_DIR}/race-validation.mjs';
+  import { onlineRaceReward } from '${STAGE_DIR}/shop-catalog.mjs';
   if (typeof createRankedStore !== 'function' || typeof createAuthStore !== 'function' || typeof validateRaceState !== 'function') {
     throw new Error('staged multiplayer modules are incomplete');
   }
   if (typeof createWalletStore !== 'function') {
     throw new Error('staged wallet store is incomplete');
   }
+  // 联机赛的金币结算依赖它；漏掉就会静默地不发钱。
+  if (typeof onlineRaceReward !== 'function') {
+    throw new Error('staged shop catalog is missing onlineRaceReward');
+  }
+  const store = createWalletStore({ filePath: '/tmp/neon-apex-deploy-check-wallets.json', flushIntervalMs: 0 });
+  if (typeof store.credit !== 'function') {
+    throw new Error('staged wallet store cannot credit online rewards');
+  }
+  store.close();
 "
+rm -f /tmp/neon-apex-deploy-check-wallets.json
 chmod 0755 "${STAGE_DIR}"
 
 # Account, rank and wallet data must survive atomic release swaps. The systemd

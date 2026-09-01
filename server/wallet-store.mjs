@@ -150,6 +150,30 @@ export function createWalletStore({
     return write(id, mergeWallets(get(id), wallet));
   }
 
+  /**
+   * 服务端自己给账号加钱（目前只有联机赛结算走这条路）。
+   *
+   * coins 和 totalEarned 必须同时加：`put` 的防清零规则以 totalEarned 为判据，
+   * 只加 coins 的话，客户端随后推一份旧存档就会整份覆盖掉刚发的奖励。两个字段
+   * 一起涨，过期写入才会退化成 mergeWallets 并被 Math.max 挡住。
+   */
+  function credit(accountId, amount) {
+    if (closed) return null;
+    const id = normalizePlayerId(accountId);
+    if (!id) return null;
+    const delta = Number(amount);
+    if (!Number.isFinite(delta) || delta <= 0) return null;
+    const rounded = Math.floor(delta);
+    const stored = get(id);
+    const next = write(id, {
+      ...stored,
+      coins: stored.coins + rounded,
+      totalEarned: stored.totalEarned + rounded,
+    });
+    // normalizeWallet 会把两个字段夹到 COIN_CAP，实际入账可能少于 rounded。
+    return { wallet: next, credited: next.coins - stored.coins };
+  }
+
   function close() {
     if (closed) return;
     closed = true;
@@ -162,6 +186,7 @@ export function createWalletStore({
     get,
     put,
     merge,
+    credit,
     snapshot: serialize,
     flush,
     close,

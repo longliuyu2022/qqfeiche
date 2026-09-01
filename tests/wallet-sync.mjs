@@ -64,7 +64,32 @@ try {
   // 脏数据不抛错。
   assert.doesNotThrow(() => store.put(accountId, { coins: -5, owned: '不是数组', totalEarned: 'abc' }));
 
+  // --- 服务端主动加钱（联机赛结算） ---------------------------------------
+  // 沿用上面已有的道具列表，别把后面「重启后仍读回 goliath」的前提清掉。
+  const ownedBeforeCredit = [...store.get(accountId).owned];
+  const beforeCredit = store.put(accountId, {
+    coins: 1000, owned: ownedBeforeCredit, totalEarned: 90000,
+  });
+  const credited = store.credit(accountId, 252);
+  assert.equal(credited.credited, 252);
+  assert.equal(credited.wallet.coins, beforeCredit.coins + 252);
+  // coins 和 totalEarned 必须同时涨，否则客户端推一份旧存档就会整份覆盖掉奖励。
+  assert.equal(credited.wallet.totalEarned, beforeCredit.totalEarned + 252);
+
+  // 关键防护：奖励入账后，客户端推上来一份「奖励之前」的存档不得抹掉这笔钱。
+  const staleAfterCredit = store.put(accountId, {
+    coins: beforeCredit.coins, owned: ownedBeforeCredit, totalEarned: beforeCredit.totalEarned,
+  });
+  assert.equal(staleAfterCredit.coins, credited.wallet.coins, '过期存档不得覆盖服务端刚发的奖励');
+  assert.equal(staleAfterCredit.totalEarned, credited.wallet.totalEarned);
+
+  assert.equal(store.credit('不是合法 id', 100), null, '非法 id 不加钱');
+  assert.equal(store.credit(accountId, 0), null, '零奖励不写入');
+  assert.equal(store.credit(accountId, -50), null, '负数不得用来扣钱');
+  assert.equal(store.credit(accountId, Number.NaN), null, 'NaN 不写入');
+
   store.close();
+  assert.equal(store.credit(accountId, 100), null, '关闭后不再加钱');
 
   // 重启后仍在磁盘上。
   const reopened = createWalletStore({ filePath, flushIntervalMs: 0 });

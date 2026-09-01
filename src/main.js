@@ -40,7 +40,7 @@ import { DEFAULT_CAR_ID, getCarById, applyCarPhysics } from './car-catalog.js';
 import { createHeroCarVariant } from './procedural-vehicle.js';
 import { computeVehicleAnimationPose } from './vehicle-animation.js';
 import { createGhostPlayer, createGhostRecorder, serializeGhost, deserializeGhost } from './ghost.js';
-import { earnCoins, getItemById, isOwned } from './shop.js';
+import { earnCoins, getItemById, isOwned, normalizeWallet } from './shop.js';
 import { getWalletSync } from './wallet-sync.js';
 import { createShopUi } from './shop-ui.js';
 import { createAchievementsUi } from './achievements-ui.js';
@@ -1107,7 +1107,7 @@ function formatScore(score) {
 }
 
 function getModeBest(modeId) {
-  return getDifficultyBest(raceRecords, modeId, vehicle.state.difficulty);
+  return getDifficultyBest(raceRecords, modeId, vehicle.state.difficulty, activeTrackId, activeTrackVariant.id);
 }
 
 function renderHomeRecords() {
@@ -1986,6 +1986,8 @@ raceSystem.on('finish', async (result) => {
     position: isOnline ? onlinePosition : mode.rivals === 0 ? 1 : result.position,
     entrants: isOnline ? onlineStandings.length : mode.rivals === 0 ? 1 : result.entrants,
     difficulty: vehicle.state.difficulty,
+    trackId: activeTrackId,
+    trackVariant: activeTrackVariant.id,
   };
   const recordUpdate = activeMode === 'training'
     ? { records: raceRecords, isNewBestTime: false, isNewBestLap: false, isNewModeBest: false }
@@ -2009,29 +2011,37 @@ raceSystem.on('finish', async (result) => {
     saveRankState(rankState);
     renderRankBadge();
   }
-  if (activeMode === 'race' && isOnline) {
+  // 联机金币由服务端按名次计算并直接入账，所有联机赛制都要等这份结算，
+  // 不只是 race —— 卡丁车和道具赛同样发钱。段位回写仍然只对 race 生效。
+  let onlineCoins = 0;
+  let onlineCoinsReason = null;
+  if (isOnline) {
     showCallout('等待服务器权威结算', 2.4);
     try {
       const authoritative = await onlineSession.waitForRankResult({ timeoutMs: 90000 });
-      // 只有真正上分的结算才回写本地段位。好友房结算带的是
-      // settled:false / reason:'unranked_room'，其 rank 字段是按空 rankedId 取到的
-      // 默认段位，照搬会把玩家的本地段位洗成青铜。
-      if (authoritative.settled) {
-        const synchronized = rankStateFromServer(authoritative.rank, rankState);
-        if (synchronized) {
-          rankState = synchronized;
-          saveRankState(rankState);
-          renderRankBadge();
+      if (activeMode === 'race') {
+        // 只有真正上分的结算才回写本地段位。好友房结算带的是
+        // settled:false / reason:'unranked_room'，其 rank 字段是按空 rankedId 取到的
+        // 默认段位，照搬会把玩家的本地段位洗成青铜。
+        if (authoritative.settled) {
+          const synchronized = rankStateFromServer(authoritative.rank, rankState);
+          if (synchronized) {
+            rankState = synchronized;
+            saveRankState(rankState);
+            renderRankBadge();
+          }
         }
+        rankOutcome = {
+          label: formatRank(rankState),
+          delta: Number(authoritative.delta) || 0,
+          promoted: Boolean(authoritative.promoted),
+          demoted: Boolean(authoritative.demoted),
+          authoritative: true,
+          settlementId: authoritative.settlementId,
+        };
       }
-      rankOutcome = {
-        label: formatRank(rankState),
-        delta: Number(authoritative.delta) || 0,
-        promoted: Boolean(authoritative.promoted),
-        demoted: Boolean(authoritative.demoted),
-        authoritative: true,
-        settlementId: authoritative.settlementId,
-      };
+      onlineCoins = Math.max(0, Math.floor(Number(authoritative.coinsAwarded) || 0));
+      onlineCoinsReason = authoritative.coinsReason ?? null;
       modeResult.position = Number(authoritative.position) || modeResult.position;
       modeResult.entrants = Number(authoritative.totalRacers) || modeResult.entrants;
     } catch (error) {
@@ -2058,6 +2068,18 @@ raceSystem.on('finish', async (result) => {
   if (payout) {
     wallet = payout.wallet;
     walletSync.persist(wallet);
+  }
+  // 联机奖励已经由服务端记在账号上，这里只把本地钱包对齐，避免玩家要等下一次
+  // 同步才看到金币。coins 和 totalEarned 同时加，跟服务端 credit 的口径一致，
+  // 本地这份才不会在下次上报时被判成过期存档。
+  if (onlineCoins > 0) {
+    wallet = normalizeWallet({
+      ...wallet,
+      coins: wallet.coins + onlineCoins,
+      totalEarned: wallet.totalEarned + onlineCoins,
+    });
+    walletSync.persist(wallet);
+    renderWallet();
   }
   const achievementOutcome = isOnline || activeMode === 'training' ? null : evaluateAchievements(achievementState, {
     mode: activeMode,
@@ -2152,11 +2174,18 @@ raceSystem.on('finish', async (result) => {
     } else {
       ui.resultRankRow.hidden = true;
     }
-    if (payout && ui.resultCoinsRow) {
-      ui.resultCoinsRow.hidden = false;
-      ui.resultCoins.textContent = `+${payout.earned}`;
-    } else if (ui.resultCoinsRow) {
-      ui.resultCoinsRow.hidden = true;
+    if (ui.resultCoinsRow) {
+      const earned = payout ? payout.earned : onlineCoins;
+      if (earned > 0) {
+        ui.resultCoinsRow.hidden = false;
+        ui.resultCoins.textContent = `+${earned}`;
+      } else {
+        ui.resultCoinsRow.hidden = true;
+      }
+    }
+    // 游客打联机拿不到钱：服务端没有可记账的账号。说清楚原因，别让人以为是 bug。
+    if (onlineCoinsReason === 'guest_no_account') {
+      showCallout('登录账号后联机比赛才能获得金币', 3);
     }
     ui.resultMenu.hidden = false;
   }, 1750);

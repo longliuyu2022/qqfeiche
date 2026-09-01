@@ -44,9 +44,7 @@ const walletSync = getWalletSync();
 let wallet = walletSync.read();
 let selectedMode = preferences.lastMode;
 let selectedTrack = normalizeTrackId(preferences.lastTrack);
-const kartTracks = new Set(RACE_MODES.kart.cuteTracks ?? [RACE_MODES.kart.cuteTrack]);
-const isKartTrack = (trackId) => kartTracks.has(trackId);
-if (selectedMode === 'kart' && !isKartTrack(selectedTrack)) selectedTrack = RACE_MODES.kart.cuteTrack;
+// 碰碰赛不再限定糖果地图：七张图都能开碰撞，选图与其他赛制完全一致。
 let selectedCarId = getCarById(preferences.carId).id;
 let bootstrapActive = true;
 let multiplayer = null;
@@ -68,7 +66,8 @@ function formatScore(score) {
 }
 
 function getModeBest(modeId) {
-  return getDifficultyBest(raceRecords, modeId, preferences.difficulty);
+  // 首页展示的是「当前选中赛道 + 变体」的纪录，跟进比赛后的口径保持一致。
+  return getDifficultyBest(raceRecords, modeId, preferences.difficulty, selectedTrack, preferences.trackVariant);
 }
 
 function eventTitle(trackId, modeId) {
@@ -232,7 +231,7 @@ function renderHome() {
     const selected = button.dataset.track === selectedTrack;
     button.classList.toggle('active', selected);
     button.setAttribute('aria-selected', String(selected));
-    button.disabled = selectedMode === 'kart' && !isKartTrack(button.dataset.track);
+    button.disabled = false;
     if (selected) selectedTrackButton = button;
   }
   revealSelectedTrack(selectedTrackButton);
@@ -269,14 +268,13 @@ const shopUi = createShopUi({
 function selectMode(modeId) {
   if (!bootstrapActive || !RACE_MODES[modeId]) return;
   selectedMode = modeId;
-  if (modeId === 'kart' && !isKartTrack(selectedTrack)) selectedTrack = RACE_MODES.kart.cuteTrack;
+  // 切到碰碰赛不再强制换图：玩家选的赛道原样保留。
   preferences = savePreferences({ ...preferences, lastMode: modeId, lastTrack: selectedTrack });
   renderHome();
 }
 
 function selectTrack(trackId, { persist = true } = {}) {
   if (!bootstrapActive || !TRACK_CATALOG[trackId] || multiplayer?.room) return;
-  if (selectedMode === 'kart' && !isKartTrack(trackId)) return;
   selectedTrack = trackId;
   if (persist) preferences = savePreferences({ ...preferences, lastTrack: trackId });
   renderHome();

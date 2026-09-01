@@ -20,7 +20,7 @@ export const TRACK_CATALOG = Object.freeze({
       items: '夜港道具大奖赛',
       timeTrial: '夜港计时赛',
       drift: '霓虹漂移挑战',
-      kart: '糖果碰碰赛',
+      kart: '夜港碰碰赛',
     }),
   }),
   day: Object.freeze({
@@ -44,7 +44,7 @@ export const TRACK_CATALOG = Object.freeze({
       items: '晴川道具大奖赛',
       timeTrial: '晴川计时赛',
       drift: '山谷漂移挑战',
-      kart: '晴川糖果碰碰赛',
+      kart: '晴川碰碰赛',
     }),
   }),
   alpine: Object.freeze({
@@ -68,7 +68,7 @@ export const TRACK_CATALOG = Object.freeze({
       items: '雪岭道具大奖赛',
       timeTrial: '雪岭计时赛',
       drift: '冰峰漂移挑战',
-      kart: '雪岭糖果碰碰赛',
+      kart: '雪岭碰碰赛',
     }),
   }),
   canyon: Object.freeze({
@@ -92,7 +92,7 @@ export const TRACK_CATALOG = Object.freeze({
       items: '赤砂道具大奖赛',
       timeTrial: '峡谷计时赛',
       drift: '赤砂漂移挑战',
-      kart: '峡谷糖果碰碰赛',
+      kart: '峡谷碰碰赛',
     }),
   }),
   coast: Object.freeze({
@@ -116,7 +116,7 @@ export const TRACK_CATALOG = Object.freeze({
       items: '海岸道具大奖赛',
       timeTrial: '海岸计时赛',
       drift: '悬崖漂移挑战',
-      kart: '海岸糖果碰碰赛',
+      kart: '海岸碰碰赛',
     }),
   }),
   candy: Object.freeze({
@@ -140,7 +140,7 @@ export const TRACK_CATALOG = Object.freeze({
       items: '糖果湾道具赛',
       timeTrial: '糖果湾计时赛',
       drift: '糖果湾漂移挑战',
-      kart: '糖果碰碰赛',
+      kart: '糖果湾碰碰赛',
     }),
   }),
   candyland: Object.freeze({

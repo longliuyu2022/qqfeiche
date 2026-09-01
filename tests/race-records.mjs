@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   RACE_RECORDS_KEY,
+  getModeBest,
   loadRaceRecords,
   recordRaceResult,
 } from '../src/race-records.js';
@@ -55,6 +56,8 @@ assert.deepEqual(first.records, {
       kartBest: null,
     },
   },
+  // 不带 trackId 的调用仍然只写聚合桶，按图纪录保持为空。
+  scoped: {},
 });
 
 const second = recordRaceResult({ finalTime: 61.8, bestLapTime: 20.4, skillScore: 390, position: 1 }, storage);
@@ -154,6 +157,93 @@ assert.deepEqual(loadRaceRecords(storage), {
       kartBest: null,
     },
   },
+  scoped: {},
 });
 
-console.log(JSON.stringify({ persistence: 'ok', modeRecords: 'ok', corruptStorageFallback: 'ok' }));
+// --- 按赛道 + 变体分别记纪录 ---------------------------------------------
+// 回归：此前纪录只按「赛制 + 难度」分组，短赛道的成绩会永久压住长赛道，
+// 4867m 的糖果王国跑出本图最好成绩也判不出破纪录。
+const scopedStorage = new MemoryStorage();
+const shortTrack = recordRaceResult({
+  mode: 'race', difficulty: 'easy', trackId: 'candy', trackVariant: 'normal',
+  finalTime: 95.2, bestLapTime: 31, position: 1,
+}, scopedStorage);
+assert.equal(shortTrack.isNewBestTime, true);
+assert.equal(shortTrack.scopeKey, 'easy:candy:normal');
+
+// 近 3 倍长的赛道用时必然更大，但它是本图第一笔成绩，必须算破纪录。
+const longTrack = recordRaceResult({
+  mode: 'race', difficulty: 'easy', trackId: 'candyland', trackVariant: 'normal',
+  finalTime: 280.5, bestLapTime: 92, position: 1,
+}, scopedStorage);
+assert.equal(longTrack.isNewBestTime, true);
+
+// 反向赛道的最优线路与正向不同，纪录必须独立。
+const reversed = recordRaceResult({
+  mode: 'race', difficulty: 'easy', trackId: 'candyland', trackVariant: 'reverse',
+  finalTime: 290.1, bestLapTime: 95, position: 1,
+}, scopedStorage);
+assert.equal(reversed.isNewBestTime, true);
+assert.equal(reversed.scopeKey, 'easy:candyland:reverse');
+
+// 同图同变体跑得更慢，不算破纪录。
+const slower = recordRaceResult({
+  mode: 'race', difficulty: 'easy', trackId: 'candyland', trackVariant: 'reverse',
+  finalTime: 295, bestLapTime: 97, position: 1,
+}, scopedStorage);
+assert.equal(slower.isNewBestTime, false);
+
+// 同图同变体但难度不同，同样各记一份。
+const hardScoped = recordRaceResult({
+  mode: 'race', difficulty: 'hard', trackId: 'candy', trackVariant: 'normal',
+  finalTime: 99.9, bestLapTime: 33, position: 1,
+}, scopedStorage);
+assert.equal(hardScoped.isNewBestTime, true);
+
+const scopedRecords = loadRaceRecords(scopedStorage);
+assert.equal(getModeBest(scopedRecords, 'race', 'easy', 'candy', 'normal'), 95.2);
+assert.equal(getModeBest(scopedRecords, 'race', 'easy', 'candyland', 'normal'), 280.5);
+assert.equal(getModeBest(scopedRecords, 'race', 'easy', 'candyland', 'reverse'), 290.1);
+assert.equal(getModeBest(scopedRecords, 'race', 'hard', 'candy', 'normal'), 99.9);
+// 没跑过的赛道没有纪录，漂移模式的空值是 0 而非 null。
+assert.equal(getModeBest(scopedRecords, 'race', 'easy', 'night', 'normal'), null);
+assert.equal(getModeBest(scopedRecords, 'drift', 'easy', 'night', 'normal'), 0);
+// 不传赛道时退回跨赛道聚合口径，供生涯统计与成就使用。
+assert.equal(getModeBest(scopedRecords, 'race', 'easy'), 95.2);
+assert.equal(scopedRecords.races, 5);
+assert.deepEqual(Object.keys(scopedRecords.scoped).sort(), [
+  'easy:candy:normal',
+  'easy:candyland:normal',
+  'easy:candyland:reverse',
+  'hard:candy:normal',
+]);
+
+// 变体缺失或非法时归到 normal，不会散出垃圾桶。
+const looseVariant = recordRaceResult({
+  mode: 'race', difficulty: 'easy', trackId: 'candy', trackVariant: 'bogus',
+  finalTime: 94, bestLapTime: 30, position: 1,
+}, scopedStorage);
+assert.equal(looseVariant.scopeKey, 'easy:candy:normal');
+assert.equal(looseVariant.isNewBestTime, true);
+
+// 存档里的非法作用域键要被丢掉，避免脏数据无限膨胀。
+const dirtyStorage = new MemoryStorage();
+dirtyStorage.setItem(RACE_RECORDS_KEY, JSON.stringify({
+  scoped: {
+    'easy:candy:normal': { races: 2, bestTime: 90 },
+    'easy:candy': { races: 1, bestTime: 10 },
+    'nightmare:candy:normal': { races: 1, bestTime: 10 },
+    'easy:candy:sideways': { races: 1, bestTime: 10 },
+    'easy::normal': { races: 1, bestTime: 10 },
+  },
+}));
+assert.deepEqual(Object.keys(loadRaceRecords(dirtyStorage).scoped), ['easy:candy:normal']);
+
+console.log(JSON.stringify({
+  persistence: 'ok',
+  modeRecords: 'ok',
+  corruptStorageFallback: 'ok',
+  perTrackScope: 'ok',
+  variantScope: 'ok',
+  scopeKeySanitation: 'ok',
+}));

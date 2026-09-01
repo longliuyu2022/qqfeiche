@@ -244,6 +244,13 @@ const NEW_RECORD_REWARD = 150;
 const MODE_MULTIPLIERS = Object.freeze({ race: 1, kart: 1.05, items: 1, timeTrial: 0.8, drift: 0.9 });
 const DEFAULT_MODE = 'race';
 
+// 联机结算只按「完赛底薪 + 名次」发钱，并打 6 折。
+//
+// 技巧分、净胜、破纪录三项奖励依赖客户端自报的 skillScore / cleanRace /
+// isNewRecord，服务端无法验证，联机若采信就是明摆着的刷钱口子。因此联机奖励
+// 只由服务端自己掌握的事实决定：名次、参赛人数、是否完赛、是否被判无效。
+const ONLINE_REWARD_RATIO = 0.6;
+
 function defaultStorage() {
   try {
     return globalThis.localStorage;
@@ -310,6 +317,24 @@ function coinsForPlacement(position, entrants) {
   return Math.round(
     PLACEMENT_REWARDS[lower] + (PLACEMENT_REWARDS[upper] - PLACEMENT_REWARDS[lower]) * (t - lower),
   );
+}
+
+/**
+ * 联机赛的金币奖励。服务端权威：调用方只能传服务端已确认的字段。
+ *
+ * 与单机 `earnCoins` 的差异：
+ *  - 只算「完赛底薪 + 名次」，不含技巧分 / 净胜 / 破纪录（客户端自报，不可信）
+ *  - 统一乘 ONLINE_REWARD_RATIO（6 折）
+ *  - 未完赛或被判无效一律 0，与段位结算的放行条件一致
+ *
+ * 返回纯数字，不碰钱包，方便服务端在结算时直接算出并下发。
+ */
+export function onlineRaceReward({ position, totalRacers, finished, settled = true } = {}) {
+  if (finished !== true || settled !== true) return 0;
+  const entrants = clampInt(totalRacers, 1, Number.MAX_SAFE_INTEGER, 1);
+  if (entrants <= 1) return 0;
+  const placement = coinsForPlacement(sanitizePosition(position, entrants), entrants);
+  return Math.round((FINISH_REWARD + placement) * ONLINE_REWARD_RATIO);
 }
 
 export function createDefaultWallet() {

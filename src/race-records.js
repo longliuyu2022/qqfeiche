@@ -1,9 +1,13 @@
-import { normalizeDifficulty } from './race-rules.js';
+import { normalizeDifficulty, normalizeTrackVariant } from './race-rules.js';
 
 export const RACE_RECORDS_KEY = 'neon-apex:race-records:v1';
 export const GHOST_KEY_PREFIX = 'neon-apex:ghost:';
 
 const GHOST_MAX_SERIALIZED_LENGTH = 80_000;
+
+// 单个赛道 + 变体的纪录桶上限。7 张图 × 3 变体 × 2 难度 = 42 个桶，留足余量后
+// 仍然封顶，避免异常写入把 localStorage 撑爆。
+const MAX_SCOPED_BUCKETS = 120;
 
 const EMPTY_DIFFICULTY_RECORD = Object.freeze({
   races: 0,
@@ -49,6 +53,31 @@ function normalizeDifficultyRecord(value = {}, fallback = {}) {
   };
 }
 
+// 纪录作用域键：难度 + 赛道 + 变体。反向和镜像的最优线路与正向完全不同，
+// 长短赛道的用时也不可比，因此三者必须各记一份，否则短图成绩会永久压住长图。
+export function recordScopeKey(difficulty, trackId, variant) {
+  return `${normalizeDifficulty(difficulty)}:${validTrackId(trackId) ? trackId : 'unknown'}:${normalizeTrackVariant(variant)}`;
+}
+
+function normalizeScoped(value) {
+  if (!value || typeof value !== 'object') return {};
+  const scoped = {};
+  let count = 0;
+  for (const [key, record] of Object.entries(value)) {
+    if (count >= MAX_SCOPED_BUCKETS) break;
+    // 键必须是 难度:赛道:变体 三段，且首尾两段能被规范化回自身，否则丢弃。
+    const parts = String(key).split(':');
+    if (parts.length !== 3) continue;
+    const [difficulty, trackId, variant] = parts;
+    if (normalizeDifficulty(difficulty) !== difficulty) continue;
+    if (normalizeTrackVariant(variant) !== variant) continue;
+    if (!validTrackId(trackId)) continue;
+    scoped[key] = normalizeDifficultyRecord(record);
+    count += 1;
+  }
+  return scoped;
+}
+
 export function normalizeRaceRecords(value = {}) {
   const races = nonNegativeInteger(value?.races);
   const legacyEasy = value?.difficultyRecords ? {} : value;
@@ -73,6 +102,9 @@ export function normalizeRaceRecords(value = {}) {
       easy: normalizeDifficultyRecord(value?.difficultyRecords?.easy, legacyEasy),
       hard: normalizeDifficultyRecord(value?.difficultyRecords?.hard),
     },
+    // 老存档没有赛道信息，无法把既有纪录归属到某张图，硬塞给任何一张都是伪造。
+    // 因此聚合字段原样保留（成就与生涯统计仍读它），按图纪录从空开始累积。
+    scoped: normalizeScoped(value?.scoped),
   };
 }
 
@@ -93,14 +125,25 @@ export function loadRaceRecords(storage) {
   }
 }
 
-export function getModeBest(records, mode = 'race', difficulty = 'easy') {
+function pickModeBest(bucket, mode) {
+  if (mode === 'timeTrial') return bucket.timeTrialBest;
+  if (mode === 'drift') return bucket.driftBest;
+  if (mode === 'items') return bucket.itemBest;
+  if (mode === 'kart') return bucket.kartBest;
+  return bucket.bestTime;
+}
+
+/**
+ * 读取个人最佳。传了 trackId 就取该赛道 + 变体的纪录（正确口径）；不传则退回
+ * 跨赛道聚合值，仅供老调用点与生涯统计使用。
+ */
+export function getModeBest(records, mode = 'race', difficulty = 'easy', trackId, variant) {
   const normalized = normalizeRaceRecords(records);
-  const scoped = normalized.difficultyRecords[normalizeDifficulty(difficulty)];
-  if (mode === 'timeTrial') return scoped.timeTrialBest;
-  if (mode === 'drift') return scoped.driftBest;
-  if (mode === 'items') return scoped.itemBest;
-  if (mode === 'kart') return scoped.kartBest;
-  return scoped.bestTime;
+  if (validTrackId(trackId)) {
+    const bucket = normalized.scoped[recordScopeKey(difficulty, trackId, variant)];
+    return bucket ? pickModeBest(bucket, mode) : (mode === 'drift' ? 0 : null);
+  }
+  return pickModeBest(normalized.difficultyRecords[normalizeDifficulty(difficulty)], mode);
 }
 
 export function recordRaceResult(result, storage) {
@@ -108,11 +151,21 @@ export function recordRaceResult(result, storage) {
   const previous = loadRaceRecords(target);
   const mode = MODES.has(result?.mode) ? result.mode : 'race';
   const difficulty = normalizeDifficulty(result?.difficulty);
-  const scopedPrevious = previous.difficultyRecords[difficulty];
+  const trackId = validTrackId(result?.trackId) ? result.trackId : null;
+  const variant = normalizeTrackVariant(result?.trackVariant);
+  const difficultyPrevious = previous.difficultyRecords[difficulty];
   const finalTime = positiveNumber(result?.finalTime);
   const bestLapTime = positiveNumber(result?.bestLapTime);
   const skillScore = nonNegativeInteger(result?.skillScore);
   const position = positiveNumber(result?.position);
+
+  // 破纪录一律以「该赛道 + 该变体 + 该难度」为准。没有 trackId 的调用点退回按
+  // 难度聚合的老口径，保持向后兼容。
+  const scopeKey = trackId ? recordScopeKey(difficulty, trackId, variant) : null;
+  const scopedPrevious = scopeKey
+    ? (previous.scoped[scopeKey] ?? normalizeDifficultyRecord())
+    : difficultyPrevious;
+
   const isNewBestTime = mode === 'race' && finalTime !== null
     && (scopedPrevious.bestTime === null || finalTime < scopedPrevious.bestTime);
   const isNewBestLap = bestLapTime !== null
@@ -125,16 +178,29 @@ export function recordRaceResult(result, storage) {
   const isNewKartBest = mode === 'kart' && finalTime !== null
     && (scopedPrevious.kartBest === null || finalTime < scopedPrevious.kartBest);
 
-  const scopedRecords = {
-    races: scopedPrevious.races + 1,
-    wins: scopedPrevious.wins + ((mode === 'race' || mode === 'items' || mode === 'kart') && position === 1 ? 1 : 0),
-    bestTime: isNewBestTime ? finalTime : scopedPrevious.bestTime,
-    bestLap: isNewBestLap ? bestLapTime : scopedPrevious.bestLap,
-    timeTrialBest: isNewTimeTrialBest ? finalTime : scopedPrevious.timeTrialBest,
-    driftBest: isNewDriftBest ? skillScore : scopedPrevious.driftBest,
-    itemBest: isNewItemBest ? finalTime : scopedPrevious.itemBest,
-    kartBest: isNewKartBest ? finalTime : scopedPrevious.kartBest,
-  };
+  const winIncrement = (mode === 'race' || mode === 'items' || mode === 'kart') && position === 1 ? 1 : 0;
+
+  const advance = (bucket) => ({
+    races: bucket.races + 1,
+    wins: bucket.wins + winIncrement,
+    bestTime: mode === 'race' && finalTime !== null
+      && (bucket.bestTime === null || finalTime < bucket.bestTime) ? finalTime : bucket.bestTime,
+    bestLap: bestLapTime !== null
+      && (bucket.bestLap === null || bestLapTime < bucket.bestLap) ? bestLapTime : bucket.bestLap,
+    timeTrialBest: mode === 'timeTrial' && finalTime !== null
+      && (bucket.timeTrialBest === null || finalTime < bucket.timeTrialBest) ? finalTime : bucket.timeTrialBest,
+    driftBest: mode === 'drift' ? Math.max(bucket.driftBest, skillScore) : bucket.driftBest,
+    itemBest: mode === 'items' && finalTime !== null
+      && (bucket.itemBest === null || finalTime < bucket.itemBest) ? finalTime : bucket.itemBest,
+    kartBest: mode === 'kart' && finalTime !== null
+      && (bucket.kartBest === null || finalTime < bucket.kartBest) ? finalTime : bucket.kartBest,
+  });
+
+  const scopedRecords = advance(difficultyPrevious);
+  const nextScoped = { ...previous.scoped };
+  if (scopeKey && (Object.hasOwn(nextScoped, scopeKey) || Object.keys(nextScoped).length < MAX_SCOPED_BUCKETS)) {
+    nextScoped[scopeKey] = advance(previous.scoped[scopeKey] ?? normalizeDifficultyRecord());
+  }
 
   const records = {
     races: previous.races + 1,
@@ -159,6 +225,7 @@ export function recordRaceResult(result, storage) {
       ...previous.difficultyRecords,
       [difficulty]: scopedRecords,
     },
+    scoped: nextScoped,
   };
 
   try {
@@ -172,6 +239,9 @@ export function recordRaceResult(result, storage) {
     previous,
     mode,
     difficulty,
+    trackId,
+    trackVariant: variant,
+    scopeKey,
     isNewBestTime,
     isNewBestLap,
     isNewModeBest: isNewBestTime || isNewTimeTrialBest || isNewDriftBest || isNewItemBest || isNewKartBest,

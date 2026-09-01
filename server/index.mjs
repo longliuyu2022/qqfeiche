@@ -7,6 +7,7 @@ import {
   createRankedStore, describeRank, normalizePlayerId, rankOrdinal,
 } from './ranked-store.mjs';
 import { createWalletStore } from './wallet-store.mjs';
+import { onlineRaceReward } from './shop-catalog.mjs';
 
 const HOST = process.env.NEON_APEX_HOST || '127.0.0.1';
 const PORT = Number(process.env.NEON_APEX_PORT || 3010);
@@ -31,7 +32,6 @@ const AUTH_COOKIE = 'neon_apex_session';
 const AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 const MAX_INVALID_STATES = 8;
 const MAP_IDS = new Set(['night', 'day', 'alpine', 'canyon', 'coast', 'candy', 'candyland']);
-const KART_MAPS = Object.freeze(['candy', 'candyland']);
 const RACE_MODE_IDS = new Set(['race', 'kart']);
 const TRACK_VARIANT_IDS = new Set(['normal', 'reverse', 'mirror']);
 // Ranked (quick match) knobs.
@@ -301,9 +301,8 @@ function normalizeMap(value) {
   return MAP_IDS.has(value) ? value : 'night';
 }
 
-function normalizeKartMap(value) {
-  return KART_MAPS.includes(value) ? value : 'candy';
-}
+// 碰碰赛与普通竞速的可选地图完全相同：碰撞是车与车之间的规则，与赛道无关。
+// 此前这里把任何非糖果地图静默改写成 candy，房主选夜港会被强行搬到糖果湾。
 
 function normalizeRaceMode(value) {
   return RACE_MODE_IDS.has(value) ? value : 'race';
@@ -415,7 +414,7 @@ function createRoom({ map, mode = 'friendly', raceMode = 'race', trackVariant = 
   const normalizedRaceMode = normalizeRaceMode(raceMode);
   const room = {
     code,
-    map: normalizedRaceMode === 'kart' ? normalizeKartMap(map) : normalizeMap(map),
+    map: normalizeMap(map),
     phase: 'lobby',
     mode,
     raceMode: normalizedRaceMode,
@@ -649,9 +648,8 @@ function onQuickMatch(socket, message) {
       return send(socket, { type: 'error', code: 'SERVER_BUSY', message: '比赛房间已满，请稍后重试' });
     }
     room = createRoom({
-      map: raceMode === 'kart'
-        ? KART_MAPS[Math.floor(Math.random() * KART_MAPS.length)]
-        : RANKED_MAPS[Math.floor(Math.random() * RANKED_MAPS.length)],
+      // 碰碰赛的排位房与普通竞速抽同一个地图池，不再只在糖果图里转。
+      map: RANKED_MAPS[Math.floor(Math.random() * RANKED_MAPS.length)],
       mode: 'ranked',
       raceMode,
       bucket,
@@ -735,6 +733,9 @@ function onReady(socket) {
     id: player.id,
     name: player.name,
     rankedId: player.rankedId,
+    // 奖励要发给「上了发车格的那个账号」，所以账号 id 一起冻结在名单里，
+    // 而不是结算时再去问当前握着 socket 的人是谁。
+    accountId: player.accountId,
     finishRank: 0,
     finishTime: null,
     invalid: false,
@@ -839,6 +840,20 @@ function settleRace(room, reason) {
     const outcome = settlementReason
       ? null
       : rankedStore.apply(entry.rankedId, { position, totalRacers, finishedRace: true });
+
+    // 金币奖励和段位分是两套门禁：段位只认排位房（unranked_room 会挡住好友房），
+    // 但好友房也该发钱。所以这里只排除「未完赛」和「状态无效」两种情况。
+    // 奖励额度由服务端按名次算，完全不看客户端上报的技巧分 / 净胜 / 破纪录。
+    const payoutBlocked = entry.invalid ? 'invalid_state' : !finished ? 'not_finished' : null;
+    const reward = payoutBlocked
+      ? 0
+      : onlineRaceReward({ position, totalRacers, finished: true, settled: true });
+    // 只有登录账号才有落点；游客钱包只存在本地，服务端无处记账。
+    const creditResult = reward > 0 && entry.accountId
+      ? walletStore.credit(entry.accountId, reward)
+      : null;
+    const coinsAwarded = creditResult?.credited ?? 0;
+
     const row = {
       playerId: entry.id,
       name: entry.name,
@@ -847,6 +862,9 @@ function settleRace(room, reason) {
       finishTime: entry.finishTime,
       settled: Boolean(outcome),
       reason: outcome ? null : settlementReason,
+      coinsAwarded,
+      // 算出了奖励但没有账号可记账时，告诉客户端为什么钱没到。
+      coinsReason: payoutBlocked ?? (reward > 0 && !entry.accountId ? 'guest_no_account' : null),
       delta: outcome?.delta ?? 0,
       rank: describeRank(outcome ? outcome.state : rankedStore.get(entry.rankedId)),
       promoted: Boolean(outcome?.promoted),

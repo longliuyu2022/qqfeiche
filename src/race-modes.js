@@ -13,13 +13,13 @@ export const RACE_MODES = Object.freeze({
     id: 'kart',
     laps: 3,
     rivals: 5,
-    meta: 'CANDY CIRCUIT // BUMPER BATTLE',
-    title: '糖果碰碰赛',
+    meta: 'BUMPER BATTLE // CONTACT RACING',
+    title: '碰碰赛',
     rules: '3 LAPS // CONTACT RACING // 6 RACERS',
     resultTitle: '碰碰赛冲线',
     kartCollisions: true,
-    cuteTrack: 'candy',
-    cuteTracks: Object.freeze(['candy', 'candyland']),
+    // 碰撞机制与赛道无关（kart-collision 只吃传进去的 trackCurve），七张地图
+    // 全部可选。此前限定糖果湾与糖果王国只是菜单门禁，不是玩法约束。
   },
   items: {
     id: 'items',

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { ArcadeVehicle } from '../src/driving.js';
 import { createKartCollisionSystem } from '../src/kart-collision.js';
+import { RACE_MODES } from '../src/race-modes.js';
+import { TRACK_CATALOG } from '../src/track-catalog.js';
 
 const curve = new THREE.CatmullRomCurve3([
   new THREE.Vector3(0, 0, 100),
@@ -72,4 +74,58 @@ const disabled = createKartCollisionSystem({
 });
 assert.deepEqual(disabled.update(1 / 60), [], 'normal race mode should leave kart contacts disabled');
 
-console.log(JSON.stringify({ headOn: 'ok', sideImpact: 'ok', cooldown: 'ok', modeGate: 'ok' }));
+// --- 碰碰赛对全部地图开放 ---------------------------------------------------
+// 回归：碰碰赛曾被菜单限制在糖果湾与糖果王国两张图，选卡丁车会强制换图、
+// 其余五张图的按钮直接禁用。碰撞只作用于车与车之间，与赛道无关，因此赛制定义
+// 里不应再出现任何白名单。
+assert.equal(RACE_MODES.kart.kartCollisions, true, '碰碰赛必须开启碰撞');
+assert.equal(RACE_MODES.kart.cuteTrack, undefined, '不应再有默认糖果地图');
+assert.equal(RACE_MODES.kart.cuteTracks, undefined, '不应再有糖果地图白名单');
+for (const [modeId, mode] of Object.entries(RACE_MODES)) {
+  assert.equal(mode.cuteTrack, undefined, `${modeId} 不应限定赛道`);
+  assert.equal(mode.cuteTracks, undefined, `${modeId} 不应限定赛道`);
+}
+
+// 七张地图的赛道曲线长度差异很大（1671m 到 4867m），碰撞系统必须都能吃下，
+// 且不依赖任何糖果地图专属数据。
+const trackIds = Object.keys(TRACK_CATALOG);
+assert.equal(trackIds.length, 7);
+for (const trackId of trackIds) {
+  // 用不同尺度的闭环代表长短赛道，验证碰撞判定与赛道几何无关。
+  const scale = trackId === 'candyland' ? 3 : 1;
+  const mapCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0, 100 * scale),
+    new THREE.Vector3(100 * scale, 0, 0),
+    new THREE.Vector3(0, 0, -100 * scale),
+    new THREE.Vector3(-100 * scale, 0, 0),
+  ], true, 'catmullrom', 0.5);
+  const mapPlayer = new ArcadeVehicle({ trackCurve: mapCurve, trackWidth: 16 });
+  mapPlayer.position.set(0, 0, 0);
+  mapPlayer.heading = 0;
+  mapPlayer.velocity.set(0, 0, 32);
+  mapPlayer.startRace();
+  const mapRival = makeRival();
+  const mapSystem = createKartCollisionSystem({
+    player: mapPlayer,
+    rivals: [mapRival],
+    trackCurve: mapCurve,
+  });
+  const speedBefore = mapPlayer.velocity.length();
+  assert.equal(mapSystem.update(1 / 60).length, 1, `${trackId} 应能判定正面碰撞`);
+  assert.ok(mapPlayer.velocity.length() < speedBefore, `${trackId} 正面碰撞应掉速`);
+  // 每张图都要有自己的碰碰赛标题，且霓虹五图不再带「糖果」字样。
+  const kartTitle = TRACK_CATALOG[trackId].modeTitles?.kart;
+  assert.ok(kartTitle, `${trackId} 缺少碰碰赛标题`);
+  if (!trackId.startsWith('candy')) {
+    assert.ok(!kartTitle.includes('糖果'), `${trackId} 的碰碰赛标题不该带「糖果」：${kartTitle}`);
+  }
+}
+
+console.log(JSON.stringify({
+  headOn: 'ok',
+  sideImpact: 'ok',
+  cooldown: 'ok',
+  modeGate: 'ok',
+  allTracks: trackIds.length,
+  noTrackWhitelist: 'ok',
+}));

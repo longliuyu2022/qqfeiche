@@ -85,8 +85,10 @@ for (const testCase of cases) {
   for (const id of maps) {
     console.log(`[maps-browser] loading ${testCase.name}/${id}`);
     if (candyTracks.has(id)) {
+      // 碰碰赛已经对全部七张图开放，切赛制不再自动换图，所以赛道要显式点。
+      // 这里仍用糖果两图做碰碰赛的截图覆盖。
       await page.locator('[data-race-mode="kart"]').click();
-      if (id !== 'candy') await page.locator(`[data-track="${id}"]`).click();
+      await page.locator(`[data-track="${id}"]`).click();
       await page.waitForFunction(() => (
         document.querySelector('[data-race-mode].active')?.dataset.raceMode === 'kart'
       ), null);

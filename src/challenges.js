@@ -41,9 +41,33 @@ const WEEKLY_POOL = Object.freeze([
   Object.freeze({ key: 'kart', label: '完成卡丁车赛', target: 3, reward: 560 }),
 ]);
 
+// mulberry32：由 hash 播种的确定性 PRNG。同一天/同一周永远得到同一组挑战，
+// 但不同日期之间能取遍所有组合。
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// 洗牌后取前 count 条。
+//
+// 旧实现用固定步长 2 取样（`pool[(offset + index * 2) % pool.length]`）：步长与
+// 池长同为偶数时，offset 的奇偶性会锁死取值集合——6 条池取 3 条只能产出
+// {0,2,4} 和 {1,3,5} 两种组合，「每日」挑战因此永远在两套之间交替。改为洗牌后
+// 6 选 3 可覆盖全部 C(6,3)=20 种组合，且不再依赖池长与步长互质。
 function pick(pool, key, count) {
-  const offset = hash(key) % pool.length;
-  return Array.from({ length: count }, (_, index) => pool[(offset + index * 2) % pool.length]);
+  const random = seededRandom(hash(key));
+  const order = [...pool];
+  for (let index = order.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(random() * (index + 1));
+    [order[index], order[swap]] = [order[swap], order[index]];
+  }
+  return order.slice(0, Math.min(count, order.length));
 }
 
 export function challengeCatalog(now = Date.now()) {
