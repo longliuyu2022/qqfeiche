@@ -183,7 +183,7 @@
 
 - 三圈完整比赛流程：倒计时、排名、计时、检查点、冲线结算和重新开始
 - 独立游戏首页，确认开始后才加载重型 3D 运行时并进入比赛倒计时
-- 五种赛事模式：3 圈多人竞速、3 圈卡丁碰碰赛、3 圈道具赛、单圈计时赛和单圈漂移挑战
+- 六种赛事模式：3 圈多人竞速、3 圈卡丁碰碰赛、3 圈道具赛、单圈计时赛、单圈漂移挑战和单圈新手训练；每种赛制都可在七张地图上开，碰碰赛不再限定糖果地图
 - QQ飞车式喷射体系：小喷、双喷、CWW/WCW、连喷、起步喷、落地喷与漂移集气阶段
 - 七图程序化加速带、飞跃台与弯道近道，腾空物理与落地喷判定
 - AI 对手会走加速带、飞跃台并按机关调整走线
@@ -344,7 +344,9 @@ neon-apex/
 │   ├── main.js                # 游戏循环、镜头、特效和 UI 协调
 │   ├── bootstrap.js           # 轻量首页、车库选车与游戏运行时延迟加载
 │   ├── driving.js             # 车辆物理、输入、漂移、喷射体系、机关与检查点逻辑
-│   ├── race-modes.js          # 赛事模式的共享定义
+│   ├── race-modes.js          # 赛事模式的共享定义（六种赛制，均可在七张图开）
+│   ├── race-rules.js          # 驾驶难度与赛道变体（正向/反向/镜像）规则
+│   ├── track-variant.js       # 按变体生成反向与镜像赛道曲线
 │   ├── race-system.js         # AI 对手、排名和比赛结果
 │   ├── kart-collision.js      # 单机/联机卡丁车辆接触、冲量与冷却
 │   ├── item-race.js           # 道具箱、道具效果、投射物和 AI 道具行为
@@ -373,14 +375,23 @@ neon-apex/
 │   ├── scenic-worlds.js       # 雪岭、峡谷、海岸路线与高细节场景
 │   ├── track-catalog.js       # 首页与运行时共享的地图信息
 │   ├── multiplayer-client.js  # 房间连接、同步与断线恢复
+│   ├── server-origin.js       # 网页与 Android 包的联机服务地址解析
 │   ├── auth-client.js         # 同源账号 API 与 HttpOnly 会话客户端
 │   ├── wallet-sync.js         # 账号钱包跨设备同步与离线降级
 │   ├── vehicle-assets.js      # 主车模型加载与程序化备用车
+│   ├── vehicle-animation.js   # 车身姿态、悬挂与轮胎动画求解
+│   ├── environment-assets.js  # 环境模型 HLOD 分级加载与预算控制
+│   ├── map-art-layouts.js     # 首页地图封面的构图数据
 │   ├── speed-postprocess.js   # 高速径向模糊后处理
 │   ├── audio.js               # 引擎、漂移、氮气音效与播报语音（女声/原声双音色）
 │   ├── preferences.js         # 画质、音量、车型、播报音色与反馈设置持久化
-│   ├── race-records.js        # 分模式本地比赛纪录与幽灵存档
+│   ├── race-records.js        # 按赛制+难度+赛道+变体分别保存纪录与幽灵存档
+│   ├── challenges.js          # 每日/每周挑战轮换、进度累计与金币奖励
+│   ├── training.js            # 新手训练场的引导步骤
+│   ├── route-navigator.js     # 长赛道的路线导航提示
+│   ├── season.js              # 赛季排行榜读取
 │   ├── telemetry.js           # WebGL 性能与错误监控
+│   ├── error-overlay.js       # 全局错误兜底与可反馈的诊断信息
 │   └── style.css              # HUD、车库和响应式触控布局
 ├── public/assets/             # 车辆、地图封面、HDRI、PBR 材质与播报语音资源
 │   └── audio/                 # music/ 比赛歌单及两套 voice 播报
@@ -440,7 +451,7 @@ python3 -m venv /tmp/ttsenv && /tmp/ttsenv/bin/pip install edge-tts
 GitHub Actions 工作流 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在推送到 `main` 和所有 Pull Request 上触发，使用 Node.js 20 依次执行：
 
 1. `npm ci` 按 `package-lock.json` 安装依赖（带 npm 缓存）
-2. `npm test` 跑完 28 套纯 Node 逻辑测试（赛制、卡丁碰撞、联机卡丁、歌单、账号、钱包同步、语音包、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
+2. `npm test` 跑完 33 套纯 Node 逻辑测试（赛制、卡丁碰撞、联机卡丁、联机金币、歌单、挑战、训练、导航、账号、钱包同步、语音包、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
 3. `npm run build` 生产构建
 4. 校验构建产物：`dist/index.html` 以及 `dist/assets` 下的 `.js` 与 `.css` 均存在且非空
 
