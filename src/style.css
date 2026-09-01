@@ -353,6 +353,7 @@ body.boosting .speed-lines { opacity: .62; animation-duration: .2s; }
 .leaderboard-list li span { color: #edfafd; font-size: 12px; }
 .leaderboard-list li small { color: #8fa5ae; font-size: 9px; }
 .training-guide { position: absolute; z-index: 8; left: 50%; top: 14%; display: grid; gap: 3px; min-width: 190px; padding: 10px 14px; transform: translateX(-50%); border: 1px solid rgba(217,255,67,.42); background: rgba(3,10,15,.76); box-shadow: 0 8px 24px rgba(0,0,0,.28); text-align: center; }
+.training-guide[hidden] { display: none; }
 .training-guide span { color: var(--acid); font-size: 8px; font-weight: 900; letter-spacing: 1.5px; }
 .training-guide b { color: #f3ffff; font-size: 16px; }
 .training-guide small { color: #9bbfc5; font-size: 9px; }
