@@ -109,6 +109,114 @@ assert.ok(glancingCar.state.trackProgress > 0.1, 'an oblique wall contact should
 assert.equal(glancingCar.state.respawnPending, false, 'oblique wall contact should not trigger a crash respawn');
 assert.equal(glancingCar.state.respawnCount, 0, 'an oblique wall contact should not stop and reset the car');
 
+function collideWithOuterWall(difficulty) {
+  const vehicle = new ArcadeVehicle({
+    trackCurve: curve,
+    trackWidth: 16,
+    difficulty,
+    crashHeadOnRatio: 1,
+  });
+  vehicle.startRace();
+  const sample = vehicle.sampleTrack();
+  const direction = sample.tangent.clone().addScaledVector(sample.normal, 0.55).normalize();
+  vehicle.position.copy(sample.point).addScaledVector(sample.normal, 12);
+  vehicle.heading = Math.atan2(direction.x, direction.z);
+  vehicle.velocity.copy(direction).multiplyScalar(30);
+  vehicle.update(1 / 60, { throttle: 0 });
+  return vehicle;
+}
+
+const easyWallCar = collideWithOuterWall('easy');
+const hardWallCar = collideWithOuterWall('hard');
+assert.equal(easyWallCar.state.difficulty, 'easy');
+assert.equal(hardWallCar.state.difficulty, 'hard');
+assert.ok(
+  hardWallCar.speed < easyWallCar.speed * 0.82,
+  'hard mode wall contact should remove substantially more speed than easy mode',
+);
+
+const hardDriftCar = new ArcadeVehicle({
+  trackCurve: curve,
+  trackWidth: 16,
+  difficulty: 'hard',
+  driftMinSpeed: 7,
+  nitroRechargeRate: 0,
+  crashHeadOnRatio: 1,
+});
+hardDriftCar.startRace();
+hardDriftCar.nitro = 30;
+const hardDriftSample = hardDriftCar.sampleTrack();
+hardDriftCar.position.copy(hardDriftSample.point);
+hardDriftCar.heading = Math.atan2(hardDriftSample.tangent.x, hardDriftSample.tangent.z);
+hardDriftCar.velocity.copy(hardDriftSample.tangent).multiplyScalar(26);
+for (let frame = 0; frame < 30; frame += 1) {
+  hardDriftCar.update(1 / 60, { throttle: 1, steer: 0.62, drift: 1 });
+}
+assert.ok(hardDriftCar.nitro > 30, 'hard mode should collect nitro during a clean drift');
+const driftWallSample = hardDriftCar.sampleTrack();
+const driftWallDirection = driftWallSample.tangent.clone().addScaledVector(driftWallSample.normal, 0.45).normalize();
+hardDriftCar.position.copy(driftWallSample.point).addScaledVector(driftWallSample.normal, 12);
+hardDriftCar.heading = Math.atan2(driftWallDirection.x, driftWallDirection.z);
+hardDriftCar.velocity.copy(driftWallDirection).multiplyScalar(28);
+hardDriftCar.update(1 / 60, { throttle: 0, steer: 0.62, drift: 1 });
+assert.equal(hardDriftCar.state.driftNitroInvalidated, true);
+assert.ok(Math.abs(hardDriftCar.nitro - 30) < 0.05, 'wall hit should roll back only this drift nitro');
+for (let frame = 0; frame < 20; frame += 1) {
+  hardDriftCar.update(1 / 60, { throttle: 1, steer: 0.62, drift: 1 });
+}
+assert.ok(Math.abs(hardDriftCar.nitro - 30) < 0.05, 'holding the same drift after impact must not collect nitro');
+hardDriftCar.update(1 / 60, { throttle: 1, steer: 0, drift: 0 });
+assert.equal(hardDriftCar.state.driftNitroInvalidated, false, 'releasing drift should reset the penalty');
+
+const easyDriftCar = new ArcadeVehicle({
+  trackCurve: curve,
+  trackWidth: 16,
+  difficulty: 'easy',
+  driftMinSpeed: 7,
+  nitroRechargeRate: 0,
+  crashHeadOnRatio: 1,
+});
+easyDriftCar.startRace();
+easyDriftCar.nitro = 30;
+const easyDriftSample = easyDriftCar.sampleTrack();
+const easyDriftDirection = easyDriftSample.tangent.clone().addScaledVector(easyDriftSample.normal, 0.45).normalize();
+easyDriftCar.position.copy(easyDriftSample.point).addScaledVector(easyDriftSample.normal, 12);
+easyDriftCar.heading = Math.atan2(easyDriftDirection.x, easyDriftDirection.z);
+easyDriftCar.velocity.copy(easyDriftDirection).multiplyScalar(28);
+easyDriftCar.update(1 / 60, { throttle: 0, steer: 0.62, drift: 1 });
+assert.equal(easyDriftCar.state.driftNitroInvalidated, false, 'easy mode keeps the forgiving drift rules');
+
+function makeNitroProbe(nitro) {
+  const vehicle = new ArcadeVehicle({ nitroRechargeRate: 0, driftMinSpeed: 7 });
+  vehicle.startRace();
+  vehicle.velocity.set(0, 0, 30);
+  vehicle.nitro = nitro;
+  return vehicle;
+}
+
+const emptyNitroCar = new ArcadeVehicle({ driftMinSpeed: 7 });
+emptyNitroCar.startRace();
+emptyNitroCar.velocity.set(0, 0, 30);
+emptyNitroCar.nitro = 0;
+for (let frame = 0; frame < 120; frame += 1) {
+  emptyNitroCar.update(1 / 60, { throttle: 1, nitro: 1 });
+  assert.equal(emptyNitroCar.state.isBoosting, false, 'an empty nitro tank must not pulse while boost is held');
+}
+assert.equal(emptyNitroCar.state.isBoosting, false, 'an empty nitro tank must not activate boost');
+assert.equal(emptyNitroCar.nitro, 0, 'an empty nitro tank must remain empty while boost is held');
+emptyNitroCar.update(1 / 60, { throttle: 1, nitro: 0 });
+assert.ok(emptyNitroCar.nitro > 0, 'nitro recharge should resume after the boost control is released');
+
+const roundedEmptyNitroCar = makeNitroProbe(0.49);
+roundedEmptyNitroCar.update(1 / 60, { throttle: 1, nitro: 1 });
+assert.equal(roundedEmptyNitroCar.state.isBoosting, false, 'a tank that displays 0 nitro must not activate boost');
+
+const depletedNitroCar = makeNitroProbe(0.6);
+depletedNitroCar.update(1 / 60, { throttle: 1, nitro: 1 });
+assert.equal(depletedNitroCar.nitro, 0, 'consuming the last nitro should clamp the tank to zero');
+depletedNitroCar.update(1 / 60, { throttle: 1, nitro: 1 });
+assert.equal(depletedNitroCar.state.isBoosting, false, 'boost must stop on the frame after the tank is depleted');
+
 const skillCar = new ArcadeVehicle({ driftMinSpeed: 7 });
 skillCar.startRace();
 skillCar.nitro = 20;

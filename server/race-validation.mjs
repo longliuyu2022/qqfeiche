@@ -6,6 +6,8 @@ export const TRACK_LENGTH_METERS = Object.freeze({
   alpine: 1846,
   canyon: 2008,
   coast: 1997,
+  candy: 1671,
+  candyland: 4867,
 });
 
 const MAX_VALID_SPEED_MPS = 150;

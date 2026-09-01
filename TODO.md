@@ -1,8 +1,8 @@
-# Neon Apex 待完善清单
+# 幻境飞车待完善清单
 
 > 记录日期：2026-08-12
 > 当前基线：`v1.7.0`，Android `versionCode 14`
-> 在线地址：<https://gaokao.aiimage.icu/>
+> 在线地址：<https://saiche.aiimage.icu/>
 
 ## 本轮已完成（v1.7.0「多近道 + 成就 + 装备件 + 排位联机」）
 
@@ -62,5 +62,5 @@ BASE_URL=http://127.0.0.1:4176 npm run test:performance
 线上健康检查：
 
 ```bash
-curl -fsS https://gaokao.aiimage.icu/.well-known/neon-apex-health.json
+curl -fsS https://saiche.aiimage.icu/.well-known/neon-apex-health.json
 ```

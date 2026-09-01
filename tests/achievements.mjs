@@ -95,7 +95,7 @@ const SCENARIOS = {
   'first-race': [finishedRace()],
   'ten-races': repeat(10, () => finishedRace()),
   'fifty-races': repeat(50, () => finishedRace()),
-  'mode-explorer': ['race', 'items', 'timeTrial', 'drift'].map((mode) => ({ mode, finished: true })),
+  'mode-explorer': ['race', 'kart', 'items', 'timeTrial', 'drift'].map((mode) => ({ mode, finished: true })),
   'drift-century': [finishedRace({ driftScore: 100_000 })],
   'coin-tycoon': [finishedRace({ totalCoins: 50_000 })],
   'perfect-start': [finishedRace({ perfectStart: true })],

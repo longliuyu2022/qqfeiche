@@ -13,7 +13,7 @@ import {
 } from '../src/server-origin.js';
 
 // --- 客户端：地址解析 ---------------------------------------------------------
-const web = { host: 'gaokao.aiimage.icu', protocol: 'https:' };
+const web = { host: 'saiche.aiimage.icu', protocol: 'https:' };
 const apk = { host: ANDROID_ASSET_HOST, protocol: 'https:' };
 const dev = { host: 'localhost:5173', protocol: 'http:' };
 const legacy = { host: '', protocol: 'file:' };
@@ -23,14 +23,14 @@ assert.equal(isPackagedHost(apk), true, 'Android 资源宿主必须被识别为�
 assert.equal(isPackagedHost(dev), false);
 assert.equal(isPackagedHost(legacy), true, 'file: 宿主仍要走绝对地址');
 
-assert.equal(socketUrl(web), 'wss://gaokao.aiimage.icu/multiplayer', '网页版保持同源');
+assert.equal(socketUrl(web), 'wss://saiche.aiimage.icu/multiplayer', '网页版保持同源');
 assert.equal(socketUrl(dev), 'ws://localhost:5173/multiplayer', 'dev 走 vite 代理，不能改成线上');
 assert.equal(
   socketUrl(apk),
-  'wss://gaokao.aiimage.icu/multiplayer',
+  'wss://saiche.aiimage.icu/multiplayer',
   'APK 必须连线上服务端，连虚拟域名会直接 DNS 失败',
 );
-assert.equal(socketUrl(legacy), 'wss://gaokao.aiimage.icu/multiplayer');
+assert.equal(socketUrl(legacy), 'wss://saiche.aiimage.icu/multiplayer');
 
 assert.equal(apiRoot(web), '/multiplayer/auth', '网页版用相对路径');
 assert.equal(apiRoot(apk), `${REMOTE_ORIGIN}/multiplayer/auth`);

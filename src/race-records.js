@@ -1,21 +1,22 @@
+import { normalizeDifficulty } from './race-rules.js';
+
 export const RACE_RECORDS_KEY = 'neon-apex:race-records:v1';
 export const GHOST_KEY_PREFIX = 'neon-apex:ghost:';
 
 const GHOST_MAX_SERIALIZED_LENGTH = 80_000;
 
-const EMPTY_RECORDS = Object.freeze({
+const EMPTY_DIFFICULTY_RECORD = Object.freeze({
   races: 0,
   wins: 0,
   bestTime: null,
   bestLap: null,
-  highScore: 0,
   timeTrialBest: null,
   driftBest: 0,
   itemBest: null,
-  modeRaces: Object.freeze({ race: 0, items: 0, timeTrial: 0, drift: 0 }),
+  kartBest: null,
 });
 
-const MODES = new Set(['race', 'items', 'timeTrial', 'drift']);
+const MODES = new Set(['race', 'kart', 'items', 'timeTrial', 'drift']);
 
 function defaultStorage() {
   try {
@@ -35,8 +36,22 @@ function nonNegativeInteger(value) {
   return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0;
 }
 
+function normalizeDifficultyRecord(value = {}, fallback = {}) {
+  return {
+    races: nonNegativeInteger(value?.races ?? fallback?.races),
+    wins: nonNegativeInteger(value?.wins ?? fallback?.wins),
+    bestTime: positiveNumber(value?.bestTime ?? fallback?.bestTime),
+    bestLap: positiveNumber(value?.bestLap ?? fallback?.bestLap),
+    timeTrialBest: positiveNumber(value?.timeTrialBest ?? fallback?.timeTrialBest),
+    driftBest: nonNegativeInteger(value?.driftBest ?? fallback?.driftBest),
+    itemBest: positiveNumber(value?.itemBest ?? fallback?.itemBest),
+    kartBest: positiveNumber(value?.kartBest ?? fallback?.kartBest),
+  };
+}
+
 export function normalizeRaceRecords(value = {}) {
   const races = nonNegativeInteger(value?.races);
+  const legacyEasy = value?.difficultyRecords ? {} : value;
   return {
     races,
     wins: nonNegativeInteger(value?.wins),
@@ -46,58 +61,103 @@ export function normalizeRaceRecords(value = {}) {
     timeTrialBest: positiveNumber(value?.timeTrialBest),
     driftBest: nonNegativeInteger(value?.driftBest),
     itemBest: positiveNumber(value?.itemBest),
+    kartBest: positiveNumber(value?.kartBest),
     modeRaces: {
       race: nonNegativeInteger(value?.modeRaces?.race ?? races),
+      kart: nonNegativeInteger(value?.modeRaces?.kart),
       items: nonNegativeInteger(value?.modeRaces?.items),
       timeTrial: nonNegativeInteger(value?.modeRaces?.timeTrial),
       drift: nonNegativeInteger(value?.modeRaces?.drift),
     },
+    difficultyRecords: {
+      easy: normalizeDifficultyRecord(value?.difficultyRecords?.easy, legacyEasy),
+      hard: normalizeDifficultyRecord(value?.difficultyRecords?.hard),
+    },
   };
+}
+
+function emptyRecords() {
+  return normalizeRaceRecords();
 }
 
 export function loadRaceRecords(storage) {
   const target = storage === undefined ? defaultStorage() : storage;
-  if (!target?.getItem) return { ...EMPTY_RECORDS, modeRaces: { ...EMPTY_RECORDS.modeRaces } };
+  if (!target?.getItem) return emptyRecords();
   try {
     const stored = target.getItem(RACE_RECORDS_KEY);
     return stored
       ? normalizeRaceRecords(JSON.parse(stored))
-      : { ...EMPTY_RECORDS, modeRaces: { ...EMPTY_RECORDS.modeRaces } };
+      : emptyRecords();
   } catch {
-    return { ...EMPTY_RECORDS, modeRaces: { ...EMPTY_RECORDS.modeRaces } };
+    return emptyRecords();
   }
+}
+
+export function getModeBest(records, mode = 'race', difficulty = 'easy') {
+  const normalized = normalizeRaceRecords(records);
+  const scoped = normalized.difficultyRecords[normalizeDifficulty(difficulty)];
+  if (mode === 'timeTrial') return scoped.timeTrialBest;
+  if (mode === 'drift') return scoped.driftBest;
+  if (mode === 'items') return scoped.itemBest;
+  if (mode === 'kart') return scoped.kartBest;
+  return scoped.bestTime;
 }
 
 export function recordRaceResult(result, storage) {
   const target = storage === undefined ? defaultStorage() : storage;
   const previous = loadRaceRecords(target);
   const mode = MODES.has(result?.mode) ? result.mode : 'race';
+  const difficulty = normalizeDifficulty(result?.difficulty);
+  const scopedPrevious = previous.difficultyRecords[difficulty];
   const finalTime = positiveNumber(result?.finalTime);
   const bestLapTime = positiveNumber(result?.bestLapTime);
   const skillScore = nonNegativeInteger(result?.skillScore);
   const position = positiveNumber(result?.position);
   const isNewBestTime = mode === 'race' && finalTime !== null
-    && (previous.bestTime === null || finalTime < previous.bestTime);
+    && (scopedPrevious.bestTime === null || finalTime < scopedPrevious.bestTime);
   const isNewBestLap = bestLapTime !== null
-    && (previous.bestLap === null || bestLapTime < previous.bestLap);
+    && (scopedPrevious.bestLap === null || bestLapTime < scopedPrevious.bestLap);
   const isNewTimeTrialBest = mode === 'timeTrial' && finalTime !== null
-    && (previous.timeTrialBest === null || finalTime < previous.timeTrialBest);
-  const isNewDriftBest = mode === 'drift' && skillScore > previous.driftBest;
+    && (scopedPrevious.timeTrialBest === null || finalTime < scopedPrevious.timeTrialBest);
+  const isNewDriftBest = mode === 'drift' && skillScore > scopedPrevious.driftBest;
   const isNewItemBest = mode === 'items' && finalTime !== null
-    && (previous.itemBest === null || finalTime < previous.itemBest);
+    && (scopedPrevious.itemBest === null || finalTime < scopedPrevious.itemBest);
+  const isNewKartBest = mode === 'kart' && finalTime !== null
+    && (scopedPrevious.kartBest === null || finalTime < scopedPrevious.kartBest);
+
+  const scopedRecords = {
+    races: scopedPrevious.races + 1,
+    wins: scopedPrevious.wins + ((mode === 'race' || mode === 'items' || mode === 'kart') && position === 1 ? 1 : 0),
+    bestTime: isNewBestTime ? finalTime : scopedPrevious.bestTime,
+    bestLap: isNewBestLap ? bestLapTime : scopedPrevious.bestLap,
+    timeTrialBest: isNewTimeTrialBest ? finalTime : scopedPrevious.timeTrialBest,
+    driftBest: isNewDriftBest ? skillScore : scopedPrevious.driftBest,
+    itemBest: isNewItemBest ? finalTime : scopedPrevious.itemBest,
+    kartBest: isNewKartBest ? finalTime : scopedPrevious.kartBest,
+  };
 
   const records = {
     races: previous.races + 1,
-    wins: previous.wins + ((mode === 'race' || mode === 'items') && position === 1 ? 1 : 0),
-    bestTime: isNewBestTime ? finalTime : previous.bestTime,
-    bestLap: isNewBestLap ? bestLapTime : previous.bestLap,
+    wins: previous.wins + ((mode === 'race' || mode === 'items' || mode === 'kart') && position === 1 ? 1 : 0),
+    bestTime: mode === 'race' && finalTime !== null && (previous.bestTime === null || finalTime < previous.bestTime)
+      ? finalTime : previous.bestTime,
+    bestLap: bestLapTime !== null && (previous.bestLap === null || bestLapTime < previous.bestLap)
+      ? bestLapTime : previous.bestLap,
     highScore: Math.max(previous.highScore, skillScore),
-    timeTrialBest: isNewTimeTrialBest ? finalTime : previous.timeTrialBest,
-    driftBest: isNewDriftBest ? skillScore : previous.driftBest,
-    itemBest: isNewItemBest ? finalTime : previous.itemBest,
+    timeTrialBest: mode === 'timeTrial' && finalTime !== null
+      && (previous.timeTrialBest === null || finalTime < previous.timeTrialBest) ? finalTime : previous.timeTrialBest,
+    driftBest: mode === 'drift' ? Math.max(previous.driftBest, skillScore) : previous.driftBest,
+    itemBest: mode === 'items' && finalTime !== null
+      && (previous.itemBest === null || finalTime < previous.itemBest) ? finalTime : previous.itemBest,
+    kartBest: mode === 'kart' && finalTime !== null
+      && (previous.kartBest === null || finalTime < previous.kartBest) ? finalTime : previous.kartBest,
     modeRaces: {
       ...previous.modeRaces,
       [mode]: previous.modeRaces[mode] + 1,
+    },
+    difficultyRecords: {
+      ...previous.difficultyRecords,
+      [difficulty]: scopedRecords,
     },
   };
 
@@ -111,9 +171,10 @@ export function recordRaceResult(result, storage) {
     records,
     previous,
     mode,
+    difficulty,
     isNewBestTime,
     isNewBestLap,
-    isNewModeBest: isNewBestTime || isNewTimeTrialBest || isNewDriftBest || isNewItemBest,
+    isNewModeBest: isNewBestTime || isNewTimeTrialBest || isNewDriftBest || isNewItemBest || isNewKartBest,
   };
 }
 

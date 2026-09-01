@@ -4,6 +4,11 @@ import * as THREE from 'three';
 import { ArcadeVehicle } from '../src/driving.js';
 import { TRACK_CURVE } from '../src/world.js';
 import { DAY_TRACK_CURVE, createDayWorld } from '../src/day-world.js';
+import { CANDY_TRACK_CURVE, createCandyWorld } from '../src/candy-world.js';
+import {
+  CANDY_KINGDOM_TRACK_CURVE,
+  createCandyKingdomWorld,
+} from '../src/candy-kingdom-world.js';
 import {
   ALPINE_TRACK_CURVE,
   CANYON_TRACK_CURVE,
@@ -19,9 +24,11 @@ import {
   curveArtFrame,
 } from '../src/map-art-layouts.js';
 
-const expectedTrackIds = ['night', 'day', 'alpine', 'canyon', 'coast'];
+const authoredTrackIds = ['night', 'day', 'alpine', 'canyon', 'coast'];
+const expectedTrackIds = [...authoredTrackIds, 'candy', 'candyland'];
+const candyTrackIds = new Set(['candy', 'candyland']);
 assert.deepEqual(Object.keys(TRACK_CATALOG), expectedTrackIds);
-assert.deepEqual(Object.keys(MAP_ART_LAYOUTS), expectedTrackIds);
+assert.deepEqual(Object.keys(MAP_ART_LAYOUTS), authoredTrackIds);
 const environmentKinds = new Set(['mountainside', 'boulder', 'apartment', 'factory', 'fir']);
 for (const [trackId, layout] of Object.entries(MAP_ART_LAYOUTS)) {
   assert.equal(layout.length, 10, `${trackId} should have ten authored HLOD placements`);
@@ -37,7 +44,7 @@ for (const [trackId, layout] of Object.entries(MAP_ART_LAYOUTS)) {
     assert.ok(entry.name.length > 3 && entry.sector.length > 2, `${trackId}.${entry.id} needs art metadata`);
   }
 }
-for (const track of Object.values(TRACK_CATALOG)) {
+for (const track of Object.values(TRACK_CATALOG).filter((entry) => entry.environmentAsset)) {
   assert.ok(track.environmentAsset, `${track.id} should define an HDR environment`);
   assert.ok(
     fs.existsSync(new URL(`../public/assets/environment/polyhaven/${track.environmentAsset}`, import.meta.url)),
@@ -54,15 +61,16 @@ const curves = {
   alpine: ALPINE_TRACK_CURVE,
   canyon: CANYON_TRACK_CURVE,
   coast: COAST_TRACK_CURVE,
+  candy: CANDY_TRACK_CURVE,
+  candyland: CANDY_KINGDOM_TRACK_CURVE,
 };
 assert.deepEqual(Object.keys(SCENIC_TRACK_CURVES), ['alpine', 'canyon', 'coast']);
 for (const [trackId, curve] of Object.entries(curves)) {
   const clearance = createClearanceField(curve);
-  const placements = buildMapArtPlacements(
-    trackId,
-    clearance,
-    (progress) => curveArtFrame(curve, progress),
+  const placements = candyTrackIds.has(trackId) ? [] : buildMapArtPlacements(
+    trackId, clearance, (progress) => curveArtFrame(curve, progress),
   );
+  if (candyTrackIds.has(trackId)) continue;
   assert.equal(placements.length, 10, `${trackId} should place every authored HLOD anchor`);
   for (const placement of placements) {
     const { x, z } = new THREE.Vector3().fromArray(placement.position);
@@ -88,12 +96,32 @@ function minimumTurnRadius(curve, sampleCount = 1600, sampleSpan = 3) {
   return minimum;
 }
 
+function turnDirectionChanges(curve, sampleCount = 720) {
+  let previous = 0;
+  let changes = 0;
+  for (let index = 0; index < sampleCount; index += 1) {
+    const current = curve.getTangentAt(index / sampleCount).setY(0).normalize();
+    const next = curve.getTangentAt(((index + 1) % sampleCount) / sampleCount).setY(0).normalize();
+    const cross = current.x * next.z - current.z * next.x;
+    if (Math.abs(cross) < 0.0001) continue;
+    const direction = Math.sign(cross);
+    if (previous && direction !== previous) changes += 1;
+    previous = direction;
+  }
+  return changes;
+}
+
 for (const [trackId, curve] of Object.entries(curves)) {
   const length = curve.getLength();
   const seamAlignment = curve.getTangentAt(0.998).setY(0).normalize()
     .dot(curve.getTangentAt(0.002).setY(0).normalize());
   const routeProbe = new ArcadeVehicle({ trackCurve: curve, trackWidth: 16, trackSamples: 720 });
-  assert.ok(length > 1650 && length < 2800, `${trackId} circuit length should be plausible`);
+  if (trackId === 'candyland') {
+    assert.ok(length > 4500 && length < 5200, 'candyland should be a genuine long-form circuit');
+    assert.ok(turnDirectionChanges(curve) >= 8, 'candyland should alternate left and right turns repeatedly');
+  } else {
+    assert.ok(length > 1650 && length < 2800, `${trackId} circuit length should be plausible`);
+  }
   assert.ok(seamAlignment > 0.72, `${trackId} circuit seam must not fold back into an opposing lane`);
   assert.ok(minimumTurnRadius(curve) > 12, `${trackId} circuit must not contain an impassable hairpin`);
   for (let index = 0; index < 160; index += 1) {
@@ -131,6 +159,34 @@ assert.equal(dayWorld.world.userData.environmentArt.placementCount, 10);
 assert.ok(dayWorld.world.userData.environmentArt.landmarkCount >= 3);
 dayWorld.update(4);
 
+const candyScene = new THREE.Scene();
+const candyWorld = createCandyWorld(candyScene, { qualityTier: 'balanced' });
+assert.equal(candyWorld.world.name, 'SugarBayCandyWorld');
+assert.equal(candyWorld.road.name, 'CandyCircuitRoad');
+assert.ok(candyWorld.world.children.length > 20, 'candy map should include animated themed scenery');
+assert.ok(candyWorld.animated.candies.length > 5);
+const candyHeight = candyWorld.animated.candies[0].position.y;
+candyWorld.update(2);
+assert.notEqual(candyWorld.animated.candies[0].position.y, candyHeight, 'candy props should animate');
+
+const candyKingdomScene = new THREE.Scene();
+const candyKingdom = createCandyKingdomWorld(candyKingdomScene, { qualityTier: 'balanced' });
+assert.equal(candyKingdom.world.name, 'CandyKingdomGrandTourWorld');
+assert.equal(candyKingdom.road.name, 'CandyKingdomGrandTourRoad');
+assert.equal(candyKingdom.world.userData.route.controlPoints, 20);
+assert.ok(candyKingdom.world.children.length > 45, 'candy kingdom should include a dense modeled landscape');
+assert.ok(candyKingdom.world.getObjectByName('FrostingCastle'), 'candy kingdom should include its frosting castle');
+assert.ok(candyKingdom.world.getObjectByName('ChocolateLake'), 'candy kingdom should include its chocolate lake');
+assert.ok(candyKingdom.world.getObjectByName('CandyCaneBeacons'), 'candy kingdom should keep themed props beside the full route');
+assert.ok(candyKingdom.world.children.filter((child) => child.userData.landmarkType === 'candy-cottage').length >= 18);
+assert.equal(candyKingdom.world.children.filter((child) => child.userData.landmarkType === 'layer-cake-tower').length, 3);
+assert.ok(candyKingdom.animated.candies.length >= 18);
+assert.ok(candyKingdom.animated.donutGates.length >= 6);
+const kingdomCandyHeight = candyKingdom.animated.candies[0].position.y;
+candyKingdom.update(3);
+assert.notEqual(candyKingdom.animated.candies[0].position.y, kingdomCandyHeight);
+assert.notEqual(candyKingdom.animated.clouds.rotation.y, 0);
+
 const expectedScenicWorlds = {
   alpine: ['FrostpeakAlpineWorld', 'FrostpeakCircuitRoad'],
   canyon: ['RedMesaCanyonWorld', 'RedMesaCircuitRoad'],
@@ -158,5 +214,8 @@ console.log(JSON.stringify({
   tracks: Object.keys(TRACK_CATALOG),
   lengths: Object.fromEntries(Object.entries(curves).map(([trackId, curve]) => [trackId, Math.round(curve.getLength())])),
   dayWorldObjects: dayWorld.world.children.length,
+  candyWorldObjects: candyWorld.world.children.length,
+  candyKingdomObjects: candyKingdom.world.children.length,
+  candyKingdomTurnChanges: turnDirectionChanges(CANDY_KINGDOM_TRACK_CURVE),
   scenicWorldObjects,
 }));

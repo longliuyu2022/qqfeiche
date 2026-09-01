@@ -7,6 +7,19 @@ export const RACE_MODES = Object.freeze({
     title: '天际线大奖赛',
     rules: '3 LAPS // 6 RACERS',
     resultTitle: '冲线',
+    kartCollisions: false,
+  },
+  kart: {
+    id: 'kart',
+    laps: 3,
+    rivals: 5,
+    meta: 'CANDY CIRCUIT // BUMPER BATTLE',
+    title: '糖果碰碰赛',
+    rules: '3 LAPS // CONTACT RACING // 6 RACERS',
+    resultTitle: '碰碰赛冲线',
+    kartCollisions: true,
+    cuteTrack: 'candy',
+    cuteTracks: Object.freeze(['candy', 'candyland']),
   },
   items: {
     id: 'items',
@@ -16,6 +29,7 @@ export const RACE_MODES = Object.freeze({
     title: '霓虹道具大奖赛',
     rules: '3 LAPS // 4 ITEMS // 6 RACERS',
     resultTitle: '道具赛冲线',
+    kartCollisions: false,
   },
   timeTrial: {
     id: 'timeTrial',
@@ -25,6 +39,7 @@ export const RACE_MODES = Object.freeze({
     title: '夜港计时赛',
     rules: '1 LAP // PERSONAL BEST',
     resultTitle: '计时完成',
+    kartCollisions: false,
   },
   drift: {
     id: 'drift',
@@ -34,5 +49,16 @@ export const RACE_MODES = Object.freeze({
     title: '霓虹漂移挑战',
     rules: '1 LAP // HIGH SCORE',
     resultTitle: '漂移完成',
+    kartCollisions: false,
+  },
+  training: {
+    id: 'training',
+    laps: 1,
+    rivals: 0,
+    meta: 'DRIVER SCHOOL // PRACTICE',
+    title: '新手训练场',
+    rules: '1 LAP // GUIDED PRACTICE',
+    resultTitle: '训练完成',
+    kartCollisions: false,
   },
 });

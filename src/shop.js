@@ -1,6 +1,8 @@
 // 商店与金币经济：纯逻辑模块，不依赖 THREE / window，可在 node 中直接运行。
 // 与 ranked.js 保持一致的风格：storage 注入、纯函数、入参永不被修改。
 
+import { difficultyRule } from './race-rules.js';
+
 export const WALLET_KEY = 'neon-apex:wallet:v1';
 
 // 商品目录：数组顺序即商店展示顺序，也是钱包 owned 的排序依据。
@@ -239,7 +241,7 @@ const SKILL_SCORE_PER_COIN = 120;
 const SKILL_REWARD_CAP = 250;
 const CLEAN_RACE_REWARD = 80;
 const NEW_RECORD_REWARD = 150;
-const MODE_MULTIPLIERS = Object.freeze({ race: 1, items: 1, timeTrial: 0.8, drift: 0.9 });
+const MODE_MULTIPLIERS = Object.freeze({ race: 1, kart: 1.05, items: 1, timeTrial: 0.8, drift: 0.9 });
 const DEFAULT_MODE = 'race';
 
 function defaultStorage() {
@@ -349,7 +351,10 @@ export function isOwned(wallet, itemId) {
 export function earnCoins(wallet, result = {}, now) {
   const base = normalizeWallet(wallet);
   const mode = Object.hasOwn(MODE_MULTIPLIERS, result?.mode ?? '') ? result.mode : DEFAULT_MODE;
-  const multiplier = MODE_MULTIPLIERS[mode];
+  const modeMultiplier = MODE_MULTIPLIERS[mode];
+  const difficulty = difficultyRule(result?.difficulty);
+  const difficultyMultiplier = difficulty.rewardMultiplier;
+  const multiplier = modeMultiplier * difficultyMultiplier;
   const entrants = clampInt(result?.entrants, 1, Number.MAX_SAFE_INTEGER, 1);
   const placement = coinsForPlacement(sanitizePosition(result?.position, entrants), entrants);
   const skill = Math.min(
@@ -374,12 +379,15 @@ export function earnCoins(wallet, result = {}, now) {
     earned,
     breakdown: {
       mode,
+      difficulty: difficulty.id,
       base: FINISH_REWARD,
       placement,
       skill,
       clean,
       record,
       subtotal,
+      modeMultiplier,
+      difficultyMultiplier,
       multiplier,
       total,
       capped: earned < total,

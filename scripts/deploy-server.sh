@@ -37,6 +37,7 @@ install -m 0644 "${PROJECT_DIR}/server/wallet-store.mjs" "${STAGE_DIR}/wallet-st
 # (see server/ranked-rules.mjs and server/shop-catalog.mjs).
 install -m 0644 "${PROJECT_DIR}/src/ranked.js" "${STAGE_DIR}/ranked-rules.mjs"
 install -m 0644 "${PROJECT_DIR}/src/shop.js" "${STAGE_DIR}/shop-catalog.mjs"
+install -m 0644 "${PROJECT_DIR}/src/race-rules.js" "${STAGE_DIR}/race-rules.js"
 install -m 0644 "${PROJECT_DIR}/server/package.json" "${STAGE_DIR}/package.json"
 install -m 0644 "${PROJECT_DIR}/server/package-lock.json" "${STAGE_DIR}/package-lock.json"
 npm ci --omit=dev --ignore-scripts --prefix "${STAGE_DIR}"
@@ -47,6 +48,7 @@ node --check "${STAGE_DIR}/ranked-store.mjs"
 node --check "${STAGE_DIR}/wallet-store.mjs"
 node --check "${STAGE_DIR}/ranked-rules.mjs"
 node --check "${STAGE_DIR}/shop-catalog.mjs"
+node --check "${STAGE_DIR}/race-rules.js"
 # Resolve the full import graph before switching: `node --check` only parses,
 # it would not have caught the missing ranked-store module that broke a deploy.
 node --input-type=module --eval "

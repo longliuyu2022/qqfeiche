@@ -21,6 +21,7 @@ export const CAR_CATALOG = [
       driftNitroRate: 1,
       miniBoostAcceleration: 1,
       miniBoostDuration: 1,
+      collisionMass: 1,
     },
   },
   {
@@ -41,6 +42,7 @@ export const CAR_CATALOG = [
       driftNitroRate: 0.92,
       miniBoostAcceleration: 1,
       miniBoostDuration: 1,
+      collisionMass: 0.88,
     },
   },
   {
@@ -61,6 +63,7 @@ export const CAR_CATALOG = [
       driftNitroRate: 1.22,
       miniBoostAcceleration: 1.08,
       miniBoostDuration: 1.06,
+      collisionMass: 0.92,
     },
   },
   {
@@ -81,6 +84,7 @@ export const CAR_CATALOG = [
       driftNitroRate: 1,
       miniBoostAcceleration: 1,
       miniBoostDuration: 1,
+      collisionMass: 1.22,
     },
   },
 ];

@@ -11,7 +11,7 @@
  * 换成 WebViewAssetLoader 之后这个判断就再也不会命中了。
  */
 
-export const REMOTE_ORIGIN = 'https://gaokao.aiimage.icu';
+export const REMOTE_ORIGIN = 'https://saiche.aiimage.icu';
 
 // AndroidX WebViewAssetLoader 的固定虚拟域名，不是我们自己的服务器。
 export const ANDROID_ASSET_HOST = 'appassets.androidplatform.net';

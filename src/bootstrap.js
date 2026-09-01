@@ -2,7 +2,7 @@ import './style.css';
 import { installErrorOverlay, recordHandled } from './error-overlay.js';
 import { RACE_MODES } from './race-modes.js';
 import { loadPreferences, savePreferences } from './preferences.js';
-import { loadRaceRecords } from './race-records.js';
+import { getModeBest as getDifficultyBest, loadRaceRecords } from './race-records.js';
 import { MultiplayerClient } from './multiplayer-client.js';
 import { TRACK_CATALOG, normalizeTrackId } from './track-catalog.js';
 import { CAR_CATALOG, getCarById } from './car-catalog.js';
@@ -12,20 +12,26 @@ import { getWalletSync } from './wallet-sync.js';
 import { createShopUi } from './shop-ui.js';
 import { createAchievementsUi } from './achievements-ui.js';
 import { getAuthSession, loginAccount, logoutAccount, registerAccount } from './auth-client.js';
+import { difficultyRule, trackVariantRule } from './race-rules.js';
+import { listChallenges, loadChallengeState } from './challenges.js';
+import { fetchSeasonLeaderboard } from './season.js';
 
 // 尽早接管：此后任何未捕获的异常都会有可读的界面，而不是让玩家对着空屏。
 installErrorOverlay();
 
 const ui = Object.fromEntries([
   'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeKicker', 'homeRank', 'homeCoins',
-  'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'homeTrackSubtitle', 'trackSelector', 'garageSelector',
+  'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'homeDifficulty', 'homeTrackSubtitle', 'trackSelector', 'garageSelector',
   'startRace', 'openMultiplayer', 'openShop', 'openAchievements', 'openAccount', 'openAccountAction', 'homeAccount',
+  'openChallenges', 'challengesMenu', 'closeChallenges', 'challengeList', 'challengeStatus',
+  'openLeaderboard', 'leaderboardMenu', 'closeLeaderboard', 'leaderboardTitle', 'leaderboardList', 'leaderboardStatus',
   'openSettings', 'settingsMenu', 'closeSettings', 'soundEnabled',
-  'masterVolume', 'volumeValue', 'qualitySetting', 'vibrationEnabled',
+  'masterVolume', 'volumeValue', 'difficultySetting', 'trackVariantSetting', 'touchLayoutSetting', 'touchOpacitySetting', 'touchOpacityValue', 'qualitySetting', 'vibrationEnabled',
   'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'voicePack', 'ghostEnabled',
   'cameraShakeEnabled', 'loading', 'multiplayerMenu', 'closeMultiplayer',
-  'onlineConnect', 'onlineLobby', 'onlineName', 'roomCode', 'createRoom', 'joinRoom',
+  'onlineConnect', 'onlineLobby', 'onlineName', 'roomCode', 'roomPassword', 'createRoom', 'joinRoom', 'spectateRoom',
   'copyRoomCode', 'onlineRoomCode', 'onlineMapName', 'onlinePlayers', 'onlineStatus',
+  'onlineQuality',
   'startOnlineRace', 'leaveRoom', 'quickMatch',
   'accountMenu', 'closeAccount', 'accountSignedOut', 'accountSignedIn', 'accountTabs',
   'accountForm', 'accountUsername', 'accountPassword', 'accountConfirmRow', 'accountConfirm',
@@ -38,6 +44,9 @@ const walletSync = getWalletSync();
 let wallet = walletSync.read();
 let selectedMode = preferences.lastMode;
 let selectedTrack = normalizeTrackId(preferences.lastTrack);
+const kartTracks = new Set(RACE_MODES.kart.cuteTracks ?? [RACE_MODES.kart.cuteTrack]);
+const isKartTrack = (trackId) => kartTracks.has(trackId);
+if (selectedMode === 'kart' && !isKartTrack(selectedTrack)) selectedTrack = RACE_MODES.kart.cuteTrack;
 let selectedCarId = getCarById(preferences.carId).id;
 let bootstrapActive = true;
 let multiplayer = null;
@@ -45,6 +54,7 @@ let onlineBusy = false;
 let accountUser = null;
 let accountMode = 'login';
 let accountBusy = false;
+let challengeState = loadChallengeState();
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return '--:--.---';
@@ -58,9 +68,7 @@ function formatScore(score) {
 }
 
 function getModeBest(modeId) {
-  if (modeId === 'timeTrial') return raceRecords.timeTrialBest;
-  if (modeId === 'drift') return raceRecords.driftBest;
-  return raceRecords.bestTime;
+  return getDifficultyBest(raceRecords, modeId, preferences.difficulty);
 }
 
 function eventTitle(trackId, modeId) {
@@ -142,6 +150,60 @@ function renderWallet() {
   if (ui.homeCoins) ui.homeCoins.textContent = Number(wallet.coins || 0).toLocaleString('en-US');
 }
 
+function renderChallenges() {
+  const challenges = listChallenges(challengeState);
+  ui.challengeList?.replaceChildren(...challenges.map((challenge) => {
+    const card = document.createElement('article');
+    card.className = 'challenge-card';
+    card.dataset.complete = String(challenge.completed);
+    const title = document.createElement('b');
+    title.textContent = `${challenge.period === 'daily' ? '今日' : '本周'} · ${challenge.label}`;
+    const reward = document.createElement('em');
+    reward.textContent = `+${challenge.reward}`;
+    const count = document.createElement('small');
+    count.textContent = `${challenge.current} / ${challenge.target} · ${challenge.completed ? '已领取' : '金币'}`;
+    const progress = document.createElement('div');
+    progress.className = 'challenge-progress';
+    const fill = document.createElement('i');
+    fill.style.width = `${Math.min(100, challenge.current / challenge.target * 100)}%`;
+    progress.append(fill);
+    card.append(title, reward, count, progress);
+    return card;
+  }));
+}
+
+function setChallengesVisible(visible) {
+  if (!ui.challengesMenu) return;
+  challengeState = loadChallengeState();
+  ui.challengesMenu.hidden = !visible;
+  if (visible) renderChallenges();
+}
+
+async function setLeaderboardVisible(visible) {
+  if (!ui.leaderboardMenu) return;
+  ui.leaderboardMenu.hidden = !visible;
+  if (!visible) return;
+  ui.leaderboardStatus.textContent = '正在读取赛季榜…';
+  try {
+    const result = await fetchSeasonLeaderboard();
+    ui.leaderboardTitle.textContent = `赛季榜 ${result.season}`;
+    ui.leaderboardList.replaceChildren(...result.players.map((player) => {
+      const row = document.createElement('li');
+      const position = document.createElement('b');
+      position.textContent = `#${player.position}`;
+      const name = document.createElement('span');
+      name.textContent = player.label || `车手 ${player.position}`;
+      const points = document.createElement('small');
+      points.textContent = `${player.wins} 胜 · ${player.points} 分`;
+      row.append(position, name, points);
+      return row;
+    }));
+    ui.leaderboardStatus.textContent = result.players.length ? '按赛季段位积分排序' : '本赛季还没有公开纪录';
+  } catch (error) {
+    ui.leaderboardStatus.textContent = error.message || '赛季榜暂时不可用';
+  }
+}
+
 // 登录拉到云端钱包、或退出回到游客钱包时，首页金币和车库解锁状态都要跟着刷新。
 walletSync.subscribe((next) => {
   wallet = next;
@@ -170,6 +232,7 @@ function renderHome() {
     const selected = button.dataset.track === selectedTrack;
     button.classList.toggle('active', selected);
     button.setAttribute('aria-selected', String(selected));
+    button.disabled = selectedMode === 'kart' && !isKartTrack(button.dataset.track);
     if (selected) selectedTrackButton = button;
   }
   revealSelectedTrack(selectedTrackButton);
@@ -177,7 +240,13 @@ function renderHome() {
   if (ui.homeTrackSubtitle) ui.homeTrackSubtitle.textContent = track.shortTitle || track.label;
   ui.homeEventMeta.textContent = mode.id === 'race' ? track.meta : mode.meta;
   ui.homeEventTitle.textContent = eventTitle(selectedTrack, selectedMode);
-  ui.homeEventRules.textContent = mode.rules;
+  const difficulty = difficultyRule(preferences.difficulty);
+  const variant = trackVariantRule(preferences.trackVariant);
+  ui.homeEventRules.textContent = `${mode.rules} // ${difficulty.label} // ${variant.label}`;
+  if (ui.homeDifficulty) {
+    ui.homeDifficulty.textContent = difficulty.id === 'hard' ? '奖励 +25%' : '标准奖励';
+    ui.homeDifficulty.dataset.difficulty = difficulty.id;
+  }
   ui.homeBestLabel.textContent = selectedMode === 'drift' ? 'HIGH SCORE' : 'PERSONAL BEST';
   ui.homeBest.textContent = selectedMode === 'drift' ? formatScore(best) : formatTime(best);
   ui.homeRaces.textContent = String(raceRecords.modeRaces[selectedMode] ?? 0);
@@ -200,12 +269,14 @@ const shopUi = createShopUi({
 function selectMode(modeId) {
   if (!bootstrapActive || !RACE_MODES[modeId]) return;
   selectedMode = modeId;
-  preferences = savePreferences({ ...preferences, lastMode: modeId });
+  if (modeId === 'kart' && !isKartTrack(selectedTrack)) selectedTrack = RACE_MODES.kart.cuteTrack;
+  preferences = savePreferences({ ...preferences, lastMode: modeId, lastTrack: selectedTrack });
   renderHome();
 }
 
 function selectTrack(trackId, { persist = true } = {}) {
   if (!bootstrapActive || !TRACK_CATALOG[trackId] || multiplayer?.room) return;
+  if (selectedMode === 'kart' && !isKartTrack(trackId)) return;
   selectedTrack = trackId;
   if (persist) preferences = savePreferences({ ...preferences, lastTrack: trackId });
   renderHome();
@@ -223,6 +294,13 @@ function syncSettings() {
   ui.voiceEnabled.checked = preferences.voiceEnabled;
   ui.voicePack.value = preferences.voicePack;
   ui.ghostEnabled.checked = preferences.ghostEnabled;
+  ui.difficultySetting.value = preferences.difficulty;
+  ui.trackVariantSetting.value = preferences.trackVariant;
+  ui.touchLayoutSetting.value = preferences.touchLayout;
+  ui.touchOpacitySetting.value = String(preferences.touchOpacity);
+  ui.touchOpacityValue.textContent = `${Math.round(preferences.touchOpacity * 100)}%`;
+  document.body.dataset.touchLayout = preferences.touchLayout;
+  document.body.style.setProperty('--touch-opacity', String(preferences.touchOpacity));
   ui.qualitySetting.value = preferences.quality;
   ui.vibrationEnabled.checked = preferences.vibration;
   ui.cameraShakeEnabled.checked = preferences.cameraShake;
@@ -232,6 +310,7 @@ function applyPreferences(changes) {
   if (!bootstrapActive) return;
   preferences = savePreferences({ ...preferences, ...changes });
   syncSettings();
+  renderHome();
 }
 
 function setSettingsVisible(visible) {
@@ -369,6 +448,7 @@ function setOnlineBusy(value) {
   onlineBusy = value;
   ui.createRoom.disabled = value;
   ui.joinRoom.disabled = value;
+  ui.spectateRoom.disabled = value;
   if (ui.quickMatch) ui.quickMatch.disabled = value;
 }
 
@@ -379,7 +459,8 @@ function ensureMultiplayer() {
   multiplayer.addEventListener('error', (event) => setOnlineStatus(event.detail.message || '联机请求失败', 'error'));
   multiplayer.addEventListener('prepare', (event) => {
     selectedTrack = normalizeTrackId(event.detail.map);
-    preferences = savePreferences({ ...preferences, lastTrack: selectedTrack });
+    selectedMode = RACE_MODES[event.detail.raceMode] ? event.detail.raceMode : 'race';
+    preferences = savePreferences({ ...preferences, lastTrack: selectedTrack, lastMode: selectedMode, trackVariant: event.detail.trackVariant ?? preferences.trackVariant });
     renderHome();
     setOnlineStatus('所有车手正在加载赛道…');
     launchGame({ online: true });
@@ -387,6 +468,15 @@ function ensureMultiplayer() {
   multiplayer.addEventListener('reconnecting', () => setOnlineStatus('连接中断，正在恢复…', 'warning'));
   multiplayer.addEventListener('resumed', () => setOnlineStatus('连接已恢复', 'success'));
   multiplayer.addEventListener('connection-lost', () => setOnlineStatus('连接已断开，请返回首页重试', 'error'));
+  multiplayer.addEventListener('kicked', (event) => {
+    renderLobby(null);
+    setOnlineStatus(event.detail.message || '你已被房主移出房间', 'error');
+  });
+  multiplayer.addEventListener('connection-quality', (event) => {
+    const info = event.detail;
+    ui.onlineQuality.textContent = `网络质量：${info.quality} · 延迟 ${info.latencyMs ?? '--'}ms${info.jitterMs === null ? '' : ` · 抖动 ${info.jitterMs}ms`}`;
+    ui.onlineQuality.dataset.quality = info.quality;
+  });
   multiplayer.addEventListener('left', () => renderLobby(null));
   return multiplayer;
 }
@@ -401,10 +491,11 @@ function renderLobby(room = multiplayer?.room) {
     return;
   }
   selectedTrack = normalizeTrackId(room.map);
-  preferences = savePreferences({ ...preferences, lastTrack: selectedTrack });
+  selectedMode = RACE_MODES[room.raceMode] ? room.raceMode : 'race';
+  preferences = savePreferences({ ...preferences, lastTrack: selectedTrack, lastMode: selectedMode, trackVariant: room.trackVariant ?? preferences.trackVariant });
   renderHome();
   ui.onlineRoomCode.textContent = room.code;
-  ui.onlineMapName.textContent = TRACK_CATALOG[selectedTrack].title;
+  ui.onlineMapName.textContent = `${TRACK_CATALOG[selectedTrack].title} · ${RACE_MODES[selectedMode].title}`;
   const rows = room.players.map((player) => {
     const row = document.createElement('li');
     const marker = document.createElement('i');
@@ -412,25 +503,37 @@ function renderLobby(room = multiplayer?.room) {
     const name = document.createElement('span');
     name.textContent = player.name;
     const state = document.createElement('small');
-    state.textContent = player.id === room.hostId ? '房主' : player.connected ? '已加入' : '重连中';
+    state.textContent = player.id === room.hostId ? '房主' : player.spectator ? '观战' : player.connected ? '已加入' : '重连中';
+    const actions = document.createElement('div');
+    actions.className = 'online-player-state';
+    actions.append(state);
     row.classList.toggle('offline', !player.connected);
-    row.append(marker, name, state);
+    row.append(marker, name, actions);
     if (player.rank?.label) {
       const rank = document.createElement('b');
       rank.className = 'player-rank';
       rank.textContent = player.rank.label;
-      row.append(rank);
+      actions.prepend(rank);
+    }
+    if (multiplayer.isHost && player.id !== multiplayer.selfId && room.phase === 'lobby') {
+      const kick = document.createElement('button');
+      kick.type = 'button';
+      kick.className = 'kick-player';
+      kick.textContent = '移出';
+      kick.addEventListener('click', () => multiplayer.kickPlayer(player.id));
+      actions.append(kick);
     }
     return row;
   });
   ui.onlinePlayers.replaceChildren(...rows);
   const isHost = multiplayer.isHost;
-  const connectedCount = room.players.filter((player) => player.connected).length;
+  const participantCount = room.players.filter((player) => !player.spectator).length;
+  const connectedCount = room.players.filter((player) => player.connected && !player.spectator).length;
   ui.startOnlineRace.hidden = !isHost;
   ui.startOnlineRace.disabled = connectedCount < 2 || room.phase !== 'lobby';
   ui.startOnlineRace.textContent = connectedCount < 2 ? '等待车手加入' : room.phase === 'lobby' ? '开始联机比赛' : '正在准备赛道';
   setOnlineStatus(
-    isHost ? `${connectedCount}/${room.players.length} 名车手在线，至少 2 人可发车` : '已加入房间，等待房主发车',
+    isHost ? `${connectedCount}/${participantCount} 名车手在线，至少 2 人可发车` : '已加入房间，等待房主发车',
     'success',
   );
 }
@@ -454,7 +557,7 @@ async function connectOnline(kind) {
     ui.onlineName.focus();
     return;
   }
-  if (kind === 'join' && ui.roomCode.value.trim().length !== 6) {
+  if ((kind === 'join' || kind === 'spectate') && ui.roomCode.value.trim().length !== 6) {
     setOnlineStatus('请输入 6 位房间码', 'error');
     ui.roomCode.focus();
     return;
@@ -465,10 +568,10 @@ async function connectOnline(kind) {
   );
   try {
     const room = kind === 'create'
-      ? await client.createRoom({ name, map: selectedTrack })
+      ? await client.createRoom({ name, map: selectedTrack, raceMode: selectedMode === 'kart' ? 'kart' : 'race', trackVariant: preferences.trackVariant, password: ui.roomPassword.value })
       : kind === 'quick'
-        ? await client.quickMatch({ name })
-        : await client.joinRoom({ name, code: ui.roomCode.value });
+        ? await client.quickMatch({ name, raceMode: selectedMode === 'kart' ? 'kart' : 'race' })
+        : await client.joinRoom({ name, code: ui.roomCode.value, password: ui.roomPassword.value, spectator: kind === 'spectate' });
     renderLobby(room);
   } catch (error) {
     setOnlineStatus(error.message || '连接失败，请重试', 'error');
@@ -482,6 +585,8 @@ async function launchGame({ online = false } = {}) {
   window.__NEON_APEX_LOADING__ = true;
   window.__NEON_APEX_AUTOSTART__ = online ? null : selectedMode;
   window.__NEON_APEX_TRACK__ = selectedTrack;
+  window.__NEON_APEX_TRACK_VARIANT__ = preferences.trackVariant;
+  window.__NEON_APEX_RACE_MODE__ = selectedMode;
   window.__NEON_APEX_ONLINE__ = online ? multiplayer : null;
   preferences = savePreferences({ ...preferences, lastMode: selectedMode, lastTrack: selectedTrack });
   ui.settingsMenu.hidden = true;
@@ -490,7 +595,7 @@ async function launchGame({ online = false } = {}) {
   ui.startRace.disabled = true;
   ui.loading.style.display = 'flex';
   ui.loading.classList.remove('done');
-  ui.loading.querySelector('p').textContent = 'NEON APEX';
+  ui.loading.querySelector('p').textContent = '幻境飞车';
   ui.loading.querySelector('small').textContent = TRACK_CATALOG[selectedTrack].loading;
   document.body.classList.add('game-loading');
 
@@ -526,6 +631,7 @@ ui.closeMultiplayer.addEventListener('click', () => setMultiplayerVisible(false)
 ui.createRoom.addEventListener('click', () => connectOnline('create'));
 ui.quickMatch?.addEventListener('click', () => connectOnline('quick'));
 ui.joinRoom.addEventListener('click', () => connectOnline('join'));
+ui.spectateRoom.addEventListener('click', () => connectOnline('spectate'));
 ui.roomCode.addEventListener('input', () => { ui.roomCode.value = ui.roomCode.value.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 6); });
 ui.copyRoomCode.addEventListener('click', async () => {
   try {
@@ -541,6 +647,10 @@ ui.openSettings.addEventListener('click', () => setSettingsVisible(true));
 ui.closeSettings.addEventListener('click', () => setSettingsVisible(false));
 ui.openShop?.addEventListener('click', () => shopUi.open());
 ui.openAchievements?.addEventListener('click', () => achievementsUi.open());
+ui.openChallenges?.addEventListener('click', () => setChallengesVisible(true));
+ui.closeChallenges?.addEventListener('click', () => setChallengesVisible(false));
+ui.openLeaderboard?.addEventListener('click', () => setLeaderboardVisible(true));
+ui.closeLeaderboard?.addEventListener('click', () => setLeaderboardVisible(false));
 ui.openAccount.addEventListener('click', () => setAccountVisible(true));
 ui.openAccountAction.addEventListener('click', () => setAccountVisible(true));
 ui.closeAccount.addEventListener('click', () => setAccountVisible(false));
@@ -559,6 +669,10 @@ ui.musicVolume.addEventListener('input', () => applyPreferences({ musicVolume: N
 ui.voiceEnabled.addEventListener('change', () => applyPreferences({ voiceEnabled: ui.voiceEnabled.checked }));
 ui.voicePack.addEventListener('change', () => applyPreferences({ voicePack: ui.voicePack.value }));
 ui.ghostEnabled.addEventListener('change', () => applyPreferences({ ghostEnabled: ui.ghostEnabled.checked }));
+ui.difficultySetting.addEventListener('change', () => applyPreferences({ difficulty: ui.difficultySetting.value }));
+ui.trackVariantSetting.addEventListener('change', () => applyPreferences({ trackVariant: ui.trackVariantSetting.value }));
+ui.touchLayoutSetting.addEventListener('change', () => applyPreferences({ touchLayout: ui.touchLayoutSetting.value }));
+ui.touchOpacitySetting.addEventListener('input', () => applyPreferences({ touchOpacity: Number(ui.touchOpacitySetting.value) }));
 ui.qualitySetting.addEventListener('change', () => applyPreferences({ quality: ui.qualitySetting.value }));
 ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibration: ui.vibrationEnabled.checked }));
 ui.cameraShakeEnabled.addEventListener('change', () => applyPreferences({ cameraShake: ui.cameraShakeEnabled.checked }));

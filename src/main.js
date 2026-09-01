@@ -7,6 +7,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { createWorld as createNightWorld, createRivalCar, TRACK_CURVE as NIGHT_TRACK_CURVE } from './world.js';
 import { createDayWorld, DAY_TRACK_CURVE } from './day-world.js';
+import { createCandyWorld, CANDY_TRACK_CURVE } from './candy-world.js';
+import { createCandyKingdomWorld, CANDY_KINGDOM_TRACK_CURVE } from './candy-kingdom-world.js';
 import {
   ALPINE_TRACK_CURVE,
   CANYON_TRACK_CURVE,
@@ -15,12 +17,19 @@ import {
 } from './scenic-worlds.js';
 import { createDetailedHeroCar } from './vehicle-assets.js';
 import { ArcadeVehicle } from './driving.js';
+import { createKartCollisionSystem } from './kart-collision.js';
 import { RaceSystem } from './race-system.js';
 import { RaceAudio, voicePackBaseUrl } from './audio.js';
-import { createMusicSystem } from './music.js';
+import { createRacePlaylist } from './race-playlist.js';
 import { createRuntimeMonitor } from './telemetry.js';
 import { createSpeedPostProcess } from './speed-postprocess.js';
-import { loadRaceRecords, recordRaceResult, saveGhost, loadGhost } from './race-records.js';
+import {
+  getModeBest as getDifficultyBest,
+  loadRaceRecords,
+  recordRaceResult,
+  saveGhost,
+  loadGhost,
+} from './race-records.js';
 import { loadPreferences, savePreferences } from './preferences.js';
 import { RACE_MODES } from './race-modes.js';
 import { TRACK_CATALOG, normalizeTrackId } from './track-catalog.js';
@@ -50,12 +59,22 @@ import {
   rankStateFromServer,
   saveRankState,
 } from './ranked.js';
+import { difficultyRule, trackVariantRule } from './race-rules.js';
+import { createTrackVariantCurve, variantWorldOptions, applyWorldVariant } from './track-variant.js';
+import { createRouteNavigator } from './route-navigator.js';
+import { loadChallengeState, saveChallengeState, updateChallenges } from './challenges.js';
+import { createTrainingCoach } from './training.js';
 
 let preferences = loadPreferences();
 const activeTrackId = normalizeTrackId(window.__NEON_APEX_TRACK__ || preferences.lastTrack);
 const activeTrack = TRACK_CATALOG[activeTrackId];
 const onlineSession = window.__NEON_APEX_ONLINE__ || null;
 const isOnline = Boolean(onlineSession?.room);
+const selfOnlinePlayer = onlineSession?.room?.players?.find((player) => player.id === onlineSession.selfId) ?? null;
+const isSpectator = Boolean(selfOnlinePlayer?.spectator);
+const activeTrackVariant = trackVariantRule(
+  isOnline ? onlineSession.room.trackVariant : (window.__NEON_APEX_TRACK_VARIANT__ || preferences.trackVariant),
+);
 const TRACK_RUNTIMES = Object.freeze({
   night: Object.freeze({
     curve: NIGHT_TRACK_CURVE,
@@ -77,9 +96,18 @@ const TRACK_RUNTIMES = Object.freeze({
     curve: COAST_TRACK_CURVE,
     createWorld: (targetScene, options) => createScenicWorld(targetScene, 'coast', options),
   }),
+  candy: Object.freeze({
+    curve: CANDY_TRACK_CURVE,
+    createWorld: (targetScene, options) => createCandyWorld(targetScene, options),
+  }),
+  candyland: Object.freeze({
+    curve: CANDY_KINGDOM_TRACK_CURVE,
+    createWorld: (targetScene, options) => createCandyKingdomWorld(targetScene, options),
+  }),
 });
 const activeTrackRuntime = TRACK_RUNTIMES[activeTrackId] ?? TRACK_RUNTIMES.night;
-const trackCurve = activeTrackRuntime.curve;
+const baseTrackCurve = activeTrackRuntime.curve;
+const trackCurve = createTrackVariantCurve(baseTrackCurve, activeTrackVariant.id);
 const STARTING_NITRO = 38;
 
 function resolveQualityTier(detectedTier) {
@@ -195,9 +223,10 @@ const trackFeatures = computeTrackFeatures(trackCurve, { trackId: activeTrackId,
 const featureZones = featureZonesForPhysics(trackFeatures);
 const world = activeTrackRuntime.createWorld(scene, {
   qualityTier,
-  shortcutZones: featureZones.shortcuts,
+  shortcutZones: variantWorldOptions(featureZones, activeTrackVariant.id).shortcuts,
   onEnvironmentAssetError: (error, kind) => runtimeMonitor.assetFailure(`environment:${kind}`, error),
 });
+applyWorldVariant(world, activeTrackVariant.id);
 const featureMeshes = buildTrackFeatureMeshes(trackFeatures, { theme: activeTrackId });
 scene.add(featureMeshes);
 const selectedCar = getCarById(preferences.carId);
@@ -205,6 +234,7 @@ const ownedCar = isOwned(getWalletSync().read(), selectedCar.id) ? selectedCar :
 // The detailed 12 MB car must never block the first rendered frame. Start with
 // the matching procedural car and upgrade it after the game is interactive.
 let hero = createHeroCarVariant(ownedCar);
+hero.visible = !isSpectator;
 scene.add(hero);
 
 const vehicle = new ArcadeVehicle(applyCarPhysics({
@@ -224,23 +254,27 @@ const vehicle = new ArcadeVehicle(applyCarPhysics({
   driftNitroRate: 18,
   miniBoostAcceleration: 30,
   miniBoostDuration: 0.62,
+  difficulty: preferences.difficulty,
 }, ownedCar));
 vehicle.setTrackFeatures(featureZones);
-vehicle.bindKeyboard(window);
-vehicle.bindTouchControls({
-  left: '[data-control="left"]',
-  right: '[data-control="right"]',
-  accelerate: '[data-control="accelerate"]',
-  brake: '[data-control="brake"]',
-  drift: '[data-control="drift"]',
-  nitro: '[data-control="nitro"]',
-});
+if (!isSpectator) {
+  vehicle.bindKeyboard(window);
+  vehicle.bindTouchControls({
+    left: '[data-control="left"]',
+    right: '[data-control="right"]',
+    accelerate: '[data-control="accelerate"]',
+    brake: '[data-control="brake"]',
+    drift: '[data-control="drift"]',
+    nitro: '[data-control="nitro"]',
+  });
+}
 
 const startT = 0.002;
 const startPoint = trackCurve.getPointAt(startT);
 const startTangent = trackCurve.getTangentAt(startT).normalize();
 const startHeading = Math.atan2(startTangent.x, startTangent.z);
-const onlinePlayerIndex = Math.max(0, onlineSession?.room?.players?.findIndex((entry) => entry.id === onlineSession.selfId) ?? 0);
+const participantRoster = (onlineSession?.room?.players ?? []).filter((entry) => !entry.spectator);
+const onlinePlayerIndex = Math.max(0, participantRoster.findIndex((entry) => entry.id === onlineSession.selfId));
 const gridRow = Math.floor(onlinePlayerIndex / 2);
 const gridProgress = THREE.MathUtils.euclideanModulo(startT - gridRow * 0.0042, 1);
 const gridPoint = trackCurve.getPointAt(gridProgress);
@@ -281,11 +315,12 @@ const raceSystem = new RaceSystem({
   // Rivals now earn their pace from pads and ramps instead of a flat speed
   // bonus. 0.976 cancels the v1.5.0 hand-tuned bump so difficulty is unchanged.
   speedCompensation: 0.976,
+  kartCollisions: Boolean(RACE_MODES[onlineSession?.room?.raceMode || window.__NEON_APEX_RACE_MODE__]?.kartCollisions),
 });
 const itemRace = new ItemRaceSystem({ scene, player: vehicle, rivals, trackCurve });
 
 const remotePlayers = new Map();
-for (const [index, player] of (onlineSession?.room?.players ?? []).entries()) {
+for (const [index, player] of participantRoster.entries()) {
   if (player.id === onlineSession.selfId) continue;
   const object = createRivalCar(player.color);
   object.userData.underglow.visible = false;
@@ -321,7 +356,7 @@ audio.setVolume(preferences.masterVolume);
 audio.setMuted(!preferences.soundEnabled);
 audio.setVoiceEnabled(preferences.voiceEnabled);
 audio.loadVoiceBank(voicePackBaseUrl(preferences.voicePack));
-const music = createMusicSystem(audio);
+const music = createRacePlaylist(audio);
 music.setVolume(preferences.musicVolume);
 music.setEnabled(preferences.musicEnabled);
 const driftEffects = createDriftEffects({ scene });
@@ -334,6 +369,8 @@ let rankState = loadRankState();
 const walletSync = getWalletSync();
 let wallet = walletSync.read();
 let achievementState = loadAchievementState();
+let challengeState = loadChallengeState();
+const trainingCoach = createTrainingCoach();
 
 // Per-race tallies feeding the achievement checks at the finish line.
 const raceTally = {
@@ -377,7 +414,9 @@ let elapsed = 0;
 let countdown = 3;
 let raceStarted = false;
 let homeVisible = true;
-let selectedMode = isOnline ? 'race' : preferences.lastMode;
+let selectedMode = isOnline
+  ? (RACE_MODES[onlineSession?.room?.raceMode] ? onlineSession.room.raceMode : 'race')
+  : preferences.lastMode;
 let activeMode = selectedMode;
 let paused = false;
 let lastDrifting = false;
@@ -388,6 +427,22 @@ let capturePaused = false;
 let previousForwardSpeed = 0;
 let wheelTravelDistance = 0;
 let waitingForOnlineStart = isOnline;
+
+const kartCollisions = createKartCollisionSystem({
+  player: vehicle,
+  rivals,
+  remotePlayers,
+  trackCurve,
+  isEnabled: () => raceStarted && !paused && Boolean(RACE_MODES[activeMode]?.kartCollisions),
+  onCollision: ({ impact, headOnRatio, collisionType }) => {
+    const message = collisionType === 'head-on' || headOnRatio > 0.65
+      ? '正面碰撞！'
+      : collisionType === 'rear-end' ? '追尾减速！' : impact > 1.1 ? '猛烈侧撞！' : '车辆接触';
+    showCallout(message, 0.65);
+    haptic(impact > 1.1 ? [18, 28, 18] : 16);
+    fovRush = Math.max(fovRush, Math.min(0.65, impact * 0.25));
+  },
+});
 let lastNetworkSendAt = 0;
 let networkSequence = 0;
 let fovRush = 0;
@@ -416,10 +471,10 @@ function collectUi() {
     'position', 'lap', 'time', 'sector', 'gear', 'speed', 'tachFill', 'nitroFill', 'nitroPct',
     'checkpoint', 'driftScore', 'combo', 'comboBlock', 'countdown', 'callout', 'loading',
     'pauseMenu', 'resultMenu', 'resultTitle', 'resultPosition', 'resultTime', 'bestLap', 'resultScore',
-    'recordStatus', 'personalBest',
+    'recordStatus', 'personalBest', 'difficultyBadge', 'turnGuide', 'turnArrow', 'turnLabel', 'turnDistance', 'trainingGuide', 'trainingStepTitle', 'trainingStepDetail',
     'homeMenu', 'homeBest', 'homeBestLabel', 'homeRaces', 'homeWins', 'homeRank', 'homeCoins',
     'homeEventMeta', 'homeEventTitle', 'homeEventRules', 'settingsMenu', 'accountMenu',
-    'soundEnabled', 'masterVolume', 'volumeValue', 'qualitySetting',
+    'soundEnabled', 'masterVolume', 'volumeValue', 'difficultySetting', 'trackVariantSetting', 'touchLayoutSetting', 'touchOpacitySetting', 'touchOpacityValue', 'qualitySetting',
     'musicEnabled', 'musicVolume', 'musicVolumeValue', 'voiceEnabled', 'voicePack', 'ghostEnabled',
     'vibrationEnabled', 'cameraShakeEnabled', 'hudTrackName', 'raceFeedTitle', 'raceFeedMeta',
     'itemHud', 'itemUse', 'itemIcon', 'itemName',
@@ -841,20 +896,22 @@ function updateCarVisuals(dt) {
 }
 
 function updateRivals(dt) {
-  raceSystem.update(dt);
-  if (!isOnline) return;
-  const response = 1 - Math.exp(-12 * dt);
-  for (const remote of remotePlayers.values()) {
-    remote.object.position.lerp(remote.targetPosition, response);
-    const angleDelta = Math.atan2(
-      Math.sin(remote.targetYaw - remote.object.rotation.y),
-      Math.cos(remote.targetYaw - remote.object.rotation.y),
-    );
-    remote.object.rotation.y += angleDelta * response;
-    for (const wheel of remote.object.userData?.wheels ?? []) {
-      wheel.rotation.x += (remote.speed * Math.min(dt, 0.05)) / 0.43;
+  if (!isSpectator) raceSystem.update(dt);
+  if (isOnline) {
+    const response = 1 - Math.exp(-12 * dt);
+    for (const remote of remotePlayers.values()) {
+      remote.object.position.lerp(remote.targetPosition, response);
+      const angleDelta = Math.atan2(
+        Math.sin(remote.targetYaw - remote.object.rotation.y),
+        Math.cos(remote.targetYaw - remote.object.rotation.y),
+      );
+      remote.object.rotation.y += angleDelta * response;
+      for (const wheel of remote.object.userData?.wheels ?? []) {
+        wheel.rotation.x += (remote.speed * Math.min(dt, 0.05)) / 0.43;
+      }
     }
   }
+  kartCollisions.update(dt);
 }
 
 function receiveOnlineSnapshot(message) {
@@ -874,7 +931,7 @@ function receiveOnlineSnapshot(message) {
 }
 
 function sendOnlineState(now = performance.now()) {
-  if (!isOnline || !raceStarted || now - lastNetworkSendAt < 66) return;
+  if (!isOnline || isSpectator || !raceStarted || now - lastNetworkSendAt < 66) return;
   lastNetworkSendAt = now;
   networkSequence += 1;
   onlineSession.sendState({
@@ -892,7 +949,7 @@ function sendOnlineState(now = performance.now()) {
 }
 
 function getOnlineStandings() {
-  const entries = [{
+  const entries = isSpectator ? [] : [{
     id: onlineSession.selfId,
     progress: Math.min(vehicle.state.totalLaps, vehicle.state.lapsCompleted + vehicle.state.lapProgress),
     finished: vehicle.state.finished,
@@ -916,7 +973,56 @@ function getOnlineStandings() {
   return entries.map((entry, index) => ({ ...entry, position: index + 1 }));
 }
 
+function spectatorFocus() {
+  let focus = null;
+  for (const remote of remotePlayers.values()) {
+    if (!remote.object.visible) continue;
+    if (!focus || (remote.finished && !focus.finished)
+      || (remote.finished === focus.finished && remote.progress > focus.progress)) {
+      focus = remote;
+    }
+  }
+  return focus;
+}
+
+function updateSpectatorCamera(dt) {
+  const focus = spectatorFocus();
+  const position = focus?.object.position ?? startPoint;
+  const heading = Number.isFinite(focus?.targetYaw) ? focus.targetYaw : startHeading;
+  const speedKph = Math.min(999, Math.abs(Number(focus?.speed) || 0) * 3.6);
+  const speedFactor = THREE.MathUtils.smoothstep(speedKph, 50, 330);
+  forward.set(Math.sin(heading), 0, Math.cos(heading)).normalize();
+  right.set(Math.cos(heading), 0, -Math.sin(heading)).normalize();
+  const portrait = camera.aspect < 0.8;
+  const compactLandscape = camera.aspect > 1.25 && innerHeight < 500;
+  const targetFov = portrait ? 52 + speedFactor * 7 : compactLandscape ? 52.5 + speedFactor * 8.5 : 54 + speedFactor * 10;
+  const desiredDistance = portrait ? 10.4 : compactLandscape ? 6.65 : 7.8;
+  const vehicleWidth = hero.userData.dimensions?.x ?? 2.4;
+  const minShare = portrait ? 0.24 : 0.14;
+  const maxDistance = (vehicleWidth * 0.94) / (
+    2 * minShare * Math.tan(THREE.MathUtils.degToRad(targetFov * 0.5)) * camera.aspect
+  );
+  const distance = Math.min(desiredDistance, maxDistance);
+  const height = portrait ? 3.75 + speedFactor * 0.2 : compactLandscape ? 2.3 + speedFactor * 0.24 : 2.55 + speedFactor * 0.28;
+  desiredCamera.copy(position).addScaledVector(forward, -distance);
+  desiredCamera.y += height;
+  camera.position.lerp(desiredCamera, 1 - Math.exp(-5.8 * dt));
+  lookTarget.copy(position).addScaledVector(forward, portrait ? 7.8 + speedFactor * 3.2 : 9 + speedFactor * 6);
+  lookTarget.y += portrait ? 0.2 : 1.05;
+  cameraTarget.lerp(lookTarget, 1 - Math.exp(-7 * dt));
+  camera.lookAt(cameraTarget);
+  camera.rotation.z = 0;
+  camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 5.5, dt);
+  camera.updateProjectionMatrix();
+  bloom.strength = THREE.MathUtils.damp(bloom.strength, activeTrack.bloomStrength, 4, dt);
+  speedPost.update({ speedKph, boosting: false, rush: 0, aspect: camera.aspect, delta: dt });
+}
+
 function updateCamera(dt) {
+  if (isSpectator) {
+    updateSpectatorCamera(dt);
+    return;
+  }
   vehicle.getForwardVector(forward);
   vehicle.getRightVector(right);
   const speedFactor = THREE.MathUtils.smoothstep(vehicle.speedKph, 50, 330);
@@ -1001,10 +1107,7 @@ function formatScore(score) {
 }
 
 function getModeBest(modeId) {
-  if (modeId === 'timeTrial') return raceRecords.timeTrialBest;
-  if (modeId === 'drift') return raceRecords.driftBest;
-  if (modeId === 'items') return raceRecords.itemBest;
-  return raceRecords.bestTime;
+  return getDifficultyBest(raceRecords, modeId, vehicle.state.difficulty);
 }
 
 function renderHomeRecords() {
@@ -1285,6 +1388,7 @@ function selectMode(modeId, { persist = true } = {}) {
 function prepareRace(modeId = activeMode) {
   activeMode = RACE_MODES[modeId] ? modeId : 'race';
   const mode = RACE_MODES[activeMode];
+  trainingCoach.reset();
   vehicle.clearInput();
   vehicle.reset({
     position: (isOnline ? playerStartPoint : startPoint).clone().add(new THREE.Vector3(0, 0.05, 0)),
@@ -1293,7 +1397,12 @@ function prepareRace(modeId = activeMode) {
   });
   previousForwardSpeed = 0;
   wheelTravelDistance = 0;
-  raceSystem.configure({ totalLaps: mode.laps, rivalCount: isOnline ? 0 : mode.rivals });
+  raceSystem.configure({
+    totalLaps: mode.laps,
+    rivalCount: isOnline ? 0 : mode.rivals,
+    kartCollisions: Boolean(mode.kartCollisions),
+  });
+  kartCollisions.reset();
   setRivalsVisible(isOnline ? 0 : mode.rivals);
   itemRace.reset({ enabled: !isOnline && activeMode === 'items' });
   driftEffects.reset();
@@ -1322,9 +1431,20 @@ function syncSettingsUi() {
   ui.voiceEnabled.checked = preferences.voiceEnabled;
   ui.voicePack.value = preferences.voicePack;
   ui.ghostEnabled.checked = preferences.ghostEnabled;
+  ui.difficultySetting.value = preferences.difficulty;
+  ui.trackVariantSetting.value = preferences.trackVariant;
+  ui.touchLayoutSetting.value = preferences.touchLayout;
+  ui.touchOpacitySetting.value = String(preferences.touchOpacity);
+  ui.touchOpacityValue.textContent = `${Math.round(preferences.touchOpacity * 100)}%`;
+  document.body.dataset.touchLayout = preferences.touchLayout;
+  document.body.style.setProperty('--touch-opacity', String(preferences.touchOpacity));
   ui.qualitySetting.value = preferences.quality;
   ui.vibrationEnabled.checked = preferences.vibration;
   ui.cameraShakeEnabled.checked = preferences.cameraShake;
+  const difficulty = difficultyRule(preferences.difficulty);
+  ui.difficultyBadge.textContent = difficulty.shortLabel;
+  ui.difficultyBadge.dataset.difficulty = difficulty.id;
+  document.body.dataset.difficulty = difficulty.id;
 }
 
 function applyPreferences(changes) {
@@ -1336,6 +1456,7 @@ function applyPreferences(changes) {
   audio.loadVoiceBank(voicePackBaseUrl(preferences.voicePack));
   music.setVolume(preferences.musicVolume);
   music.setEnabled(preferences.musicEnabled && !paused);
+  vehicle.setDifficulty(preferences.difficulty);
   qualityTier = resolveQualityTier(detectedQualityTier);
   renderer.shadowMap.enabled = qualityTier !== 'balanced';
   renderer.shadowMap.type = qualityTier === 'ultra' ? THREE.VSMShadowMap : THREE.PCFSoftShadowMap;
@@ -1371,33 +1492,57 @@ function showCallout(text, duration = 1.1) {
 }
 
 function updateUi() {
-  const kph = Math.round(vehicle.speedKph);
+  const focus = isSpectator ? spectatorFocus() : null;
+  const focusSpeedKph = Math.min(999, Math.round(Math.abs(Number(focus?.speed) || 0) * 3.6));
+  const kph = isSpectator ? focusSpeedKph : Math.round(vehicle.speedKph);
   ui.speed.textContent = String(Math.min(kph, 999)).padStart(3, '0');
   ui.gear.textContent = kph < 2 ? 'N' : String(Math.min(7, Math.max(1, Math.floor(kph / 48) + 1)));
   ui.tachFill.style.width = `${Math.min(100, (kph / 350) * 100)}%`;
-  ui.nitroFill.style.width = `${vehicle.state.nitroNormalized * 100}%`;
-  ui.nitroFill.dataset.charge = String(vehicle.state.chargeLevel);
-  ui.nitroPct.textContent = String(Math.round(vehicle.state.nitro));
+  ui.nitroFill.style.width = `${isSpectator ? 0 : vehicle.state.nitroNormalized * 100}%`;
+  ui.nitroFill.dataset.charge = String(isSpectator ? 0 : vehicle.state.chargeLevel);
+  ui.nitroPct.textContent = isSpectator ? '--' : String(Math.round(vehicle.state.nitro));
   const item = itemRace.inventory ? ITEM_DEFINITIONS[itemRace.inventory] : null;
   ui.itemIcon.textContent = item?.icon ?? '?';
   ui.itemName.textContent = item?.label ?? '等待拾取';
   ui.itemUse.disabled = !item || !raceStarted || paused;
   ui.itemUse.classList.toggle('ready', Boolean(item && raceStarted && !paused));
   ui.itemUse.setAttribute('aria-label', item ? `使用${item.label}` : '尚未获得道具');
-  ui.lap.innerHTML = `${vehicle.lap}<small>/ ${RACE_MODES[activeMode].laps}</small>`;
-  ui.time.textContent = formatTime(vehicle.state.raceTime);
-  ui.sector.textContent = String(Math.min(3, Math.floor(vehicle.progress * 3) + 1)).padStart(2, '0');
-  ui.checkpoint.textContent = `${String(vehicle.state.nextCheckpoint).padStart(2, '0')} / ${vehicle.state.checkpointCount}`;
-  const liveDriftScore = Math.round(vehicle.state.skillScore + vehicle.state.driftScore);
+  const focusProgress = focus ? THREE.MathUtils.euclideanModulo(focus.progress / Math.max(1, RACE_MODES[activeMode].laps), 1) : 0;
+  ui.lap.innerHTML = `${isSpectator ? Math.max(1, focus?.lap ?? 1) : vehicle.lap}<small>/ ${RACE_MODES[activeMode].laps}</small>`;
+  ui.time.textContent = isSpectator ? formatTime(Math.max(0, elapsed - Math.max(0, countdown))) : formatTime(vehicle.state.raceTime);
+  const routeProgress = isSpectator ? focusProgress : vehicle.progress;
+  ui.sector.textContent = String(Math.min(3, Math.floor(routeProgress * 3) + 1)).padStart(2, '0');
+  const routeCue = routeNavigator.getCue(routeProgress);
+  const primaryTurn = routeCue.primary;
+  ui.turnArrow.textContent = primaryTurn
+    ? primaryTurn.direction === 'left' ? '↰' : '↱'
+    : '↑';
+  ui.turnLabel.textContent = primaryTurn?.label ?? '保持路线';
+  ui.turnDistance.textContent = primaryTurn
+    ? `${primaryTurn.distance}m${routeCue.secondary ? ` · ${routeCue.secondary.label}` : ''}`
+    : '前方无急弯';
+  ui.turnGuide?.setAttribute('data-severity', primaryTurn?.severity ?? 'straight');
+  if (activeMode === 'training' && !isSpectator) {
+    const trainingState = trainingCoach.update(vehicle.getSnapshot());
+    ui.trainingGuide.hidden = trainingState.completed;
+    ui.trainingStepTitle.textContent = trainingState.completed ? '训练完成' : trainingState.step.title;
+    ui.trainingStepDetail.textContent = trainingState.completed ? '现在可以挑战正式赛事' : trainingState.step.detail;
+  } else {
+    ui.trainingGuide.hidden = true;
+  }
+  ui.checkpoint.textContent = isSpectator ? '-- / --' : `${String(vehicle.state.nextCheckpoint).padStart(2, '0')} / ${vehicle.state.checkpointCount}`;
+  const liveDriftScore = isSpectator ? 0 : Math.round(vehicle.state.skillScore + vehicle.state.driftScore);
   ui.driftScore.textContent = String(liveDriftScore).padStart(6, '0');
-  const chain = Math.max(vehicle.state.combo, vehicle.state.nitroChain, 1);
+  const chain = isSpectator ? 1 : Math.max(vehicle.state.combo, vehicle.state.nitroChain, 1);
   ui.combo.textContent = `x${chain}`;
   ui.comboBlock.classList.toggle('active', chain > 1);
 
   const onlineStandings = isOnline ? getOnlineStandings() : null;
   const playerPosition = onlineStandings?.find((entry) => entry.isPlayer)?.position ?? raceSystem.state.playerPosition;
   const entrantCount = onlineStandings?.length ?? raceSystem.state.entrantCount;
-  if (raceStarted && !vehicle.state.finished && entrantCount > 1) {
+  if (isSpectator) {
+    ui.position.innerHTML = `观战<small>/ ${entrantCount}</small>`;
+  } else if (raceStarted && !vehicle.state.finished && entrantCount > 1) {
     if (lastPlayerPosition !== null && playerPosition < lastPlayerPosition && overtakeCooldown <= 0) {
       showCallout('漂亮的超越！', 1.1);
       announce('overtake');
@@ -1405,12 +1550,13 @@ function updateUi() {
     }
     lastPlayerPosition = playerPosition;
   }
-  ui.position.innerHTML = `${playerPosition}<small>/ ${entrantCount}</small>`;
+  if (!isSpectator) ui.position.innerHTML = `${playerPosition}<small>/ ${entrantCount}</small>`;
   drawMinimap();
 }
 
 const mapCanvas = document.querySelector('#minimap');
 const mapContext = mapCanvas.getContext('2d');
+const routeNavigator = createRouteNavigator(trackCurve, { maxLookAheadMeters: activeTrackId === 'candyland' ? 420 : 320 });
 const mapPoints = trackCurve.getSpacedPoints(180);
 const bounds = mapPoints.reduce((box, point) => ({
   minX: Math.min(box.minX, point.x), maxX: Math.max(box.maxX, point.x),
@@ -1480,10 +1626,12 @@ function drawMinimap() {
     ctx.fillStyle = '#ffcf5a';
     ctx.beginPath(); ctx.arc(mapped.x, mapped.y, 2.8, 0, Math.PI * 2); ctx.fill();
   }
-  const player = mapPosition(vehicle.position);
+  const focus = isSpectator ? spectatorFocus() : null;
+  const player = mapPosition(focus?.object.position ?? vehicle.position);
   ctx.fillStyle = '#ffffff';
   ctx.shadowColor = '#35e7ff';
   ctx.shadowBlur = 9;
+  if (isSpectator && !focus) return;
   ctx.beginPath(); ctx.arc(player.x, player.y, 4.2, 0, Math.PI * 2); ctx.fill();
   ctx.shadowBlur = 0;
 }
@@ -1645,11 +1793,19 @@ ui.musicVolume.addEventListener('input', () => applyPreferences({ musicVolume: N
 ui.voiceEnabled.addEventListener('change', () => applyPreferences({ voiceEnabled: ui.voiceEnabled.checked }));
 ui.voicePack.addEventListener('change', () => applyPreferences({ voicePack: ui.voicePack.value }));
 ui.ghostEnabled.addEventListener('change', () => applyPreferences({ ghostEnabled: ui.ghostEnabled.checked }));
+ui.difficultySetting.addEventListener('change', () => applyPreferences({ difficulty: ui.difficultySetting.value }));
+ui.trackVariantSetting.addEventListener('change', () => {
+  preferences = savePreferences({ ...preferences, trackVariant: ui.trackVariantSetting.value });
+  location.reload();
+});
+ui.touchLayoutSetting.addEventListener('change', () => applyPreferences({ touchLayout: ui.touchLayoutSetting.value }));
+ui.touchOpacitySetting.addEventListener('input', () => applyPreferences({ touchOpacity: Number(ui.touchOpacitySetting.value) }));
 ui.qualitySetting.addEventListener('change', () => applyPreferences({ quality: ui.qualitySetting.value }));
 ui.vibrationEnabled.addEventListener('change', () => applyPreferences({ vibration: ui.vibrationEnabled.checked }));
 ui.cameraShakeEnabled.addEventListener('change', () => applyPreferences({ cameraShake: ui.cameraShakeEnabled.checked }));
 window.addEventListener('keydown', (event) => {
   audio.start();
+  music.resume();
   if (!ui.accountMenu.hidden) return;
   if (shopUi.visible) {
     if (event.code === 'Escape') shopUi.close();
@@ -1680,15 +1836,25 @@ window.addEventListener('keydown', (event) => {
   if (event.code === 'Escape') setPaused(!paused);
   if (event.code === 'KeyR' && raceStarted && !paused) vehicle.respawn('manual');
 });
-window.addEventListener('pointerdown', () => audio.start(), { once: true });
+window.addEventListener('pointerdown', () => {
+  audio.start();
+  music.resume();
+});
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && raceStarted && !isOnline) setPaused(true);
+  if (document.hidden) {
+    // A tab switch can skip keyup, leaving Space latched in the vehicle's
+    // keyboard source when the race resumes.
+    vehicle.clearInput();
+    if (raceStarted && !isOnline) setPaused(true);
+  }
 });
 
-function beginOnlineRace(startAt) {
+function beginOnlineRace(startAt, raceMode = onlineSession?.room?.raceMode) {
   audio.start();
   music.start(activeTrackId);
-  prepareRace('race');
+  const mode = RACE_MODES[raceMode] ? raceMode : 'race';
+  selectedMode = mode;
+  prepareRace(mode);
   homeVisible = false;
   paused = false;
   raceStarted = false;
@@ -1705,10 +1871,29 @@ function beginOnlineRace(startAt) {
 
 if (isOnline) {
   onlineSession.addEventListener('snapshot', (event) => receiveOnlineSnapshot(event.detail));
-  onlineSession.addEventListener('race-start', (event) => beginOnlineRace(event.detail.startAt));
+  onlineSession.addEventListener('race-start', (event) => {
+    beginOnlineRace(event.detail.startAt, event.detail.raceMode);
+  });
   onlineSession.addEventListener('reconnecting', () => showCallout('正在恢复连接', 1.2));
   onlineSession.addEventListener('resumed', () => showCallout('连接已恢复', 1));
   onlineSession.addEventListener('connection-lost', () => showCallout('连接已断开', 2));
+  onlineSession.addEventListener('race-result', (event) => {
+    if (!isSpectator) return;
+    const winner = event.detail?.standings?.[0];
+    paused = true;
+    ui.resultTitle.textContent = '比赛结束';
+    ui.resultPosition.textContent = '观战';
+    ui.resultPosition.nextElementSibling.textContent = `/ ${event.detail?.totalRacers ?? remotePlayers.size}`;
+    ui.resultTime.textContent = '--:--.---';
+    ui.bestLap.textContent = '--:--.---';
+    ui.resultScore.textContent = '------';
+    ui.recordStatus.textContent = winner?.name ? `${winner.name} 获得第一名` : '比赛已结束';
+    ui.recordStatus.classList.remove('new-record');
+    ui.resultRankRow.hidden = true;
+    if (ui.resultCoinsRow) ui.resultCoinsRow.hidden = true;
+    ui.resultMenu.hidden = false;
+    showCallout(winner?.name ? `${winner.name} 冲线第一` : '比赛结束', 2.4);
+  });
 }
 
 vehicle.on('lap', (state) => {
@@ -1768,7 +1953,10 @@ vehicle.on('nitroChain', ({ chain }) => {
   haptic([12, 24, 12]);
   showCallout(`NITRO CHAIN x${chain}`, 1.05);
 });
-vehicle.on('collision', () => haptic(35));
+vehicle.on('collision', ({ driftNitroCancelled = false }) => {
+  haptic(35);
+  if (driftNitroCancelled) showCallout('撞墙：本次漂移集气作废', 1.05);
+});
 vehicle.on('shortcut', () => showCallout('CHECKPOINT MISSED', 1.2));
 vehicle.on('respawn', ({ reason }) => showCallout(reason === 'manual' ? 'RESET' : 'TRACK RESET', 0.9));
 itemRace.on('pickup', ({ definition }) => {
@@ -1797,8 +1985,11 @@ raceSystem.on('finish', async (result) => {
     mode: activeMode,
     position: isOnline ? onlinePosition : mode.rivals === 0 ? 1 : result.position,
     entrants: isOnline ? onlineStandings.length : mode.rivals === 0 ? 1 : result.entrants,
+    difficulty: vehicle.state.difficulty,
   };
-  const recordUpdate = recordRaceResult(modeResult);
+  const recordUpdate = activeMode === 'training'
+    ? { records: raceRecords, isNewBestTime: false, isNewBestLap: false, isNewModeBest: false }
+    : recordRaceResult(modeResult);
   raceRecords = recordUpdate.records;
   if (activeMode === 'timeTrial' && ghostRecorder) {
     const completedGhost = ghostRecorder.complete(modeResult.finalTime);
@@ -1853,8 +2044,9 @@ raceSystem.on('finish', async (result) => {
   } else if (recordUpdate.isNewModeBest) {
     announce('new_record');
   }
-  const payout = isOnline ? null : earnCoins(wallet, {
+  const payout = isOnline || activeMode === 'training' ? null : earnCoins(wallet, {
     mode: activeMode,
+    difficulty: modeResult.difficulty,
     position: modeResult.position,
     entrants: modeResult.entrants,
     finalTime: modeResult.finalTime,
@@ -1867,7 +2059,7 @@ raceSystem.on('finish', async (result) => {
     wallet = payout.wallet;
     walletSync.persist(wallet);
   }
-  const achievementOutcome = isOnline ? null : evaluateAchievements(achievementState, {
+  const achievementOutcome = isOnline || activeMode === 'training' ? null : evaluateAchievements(achievementState, {
     mode: activeMode,
     position: modeResult.position,
     entrants: modeResult.entrants,
@@ -1897,6 +2089,33 @@ raceSystem.on('finish', async (result) => {
       setTimeout(() => showCallout(`成就达成：${unlocked.name ?? unlocked.id}`, 1.6), 2600 + index * 1500);
     }
   }
+  const challengeOutcome = isOnline || activeMode === 'training' ? null : updateChallenges(challengeState, {
+    mode: activeMode,
+    difficulty: modeResult.difficulty,
+    position: modeResult.position,
+    entrants: modeResult.entrants,
+    finished: true,
+    cleanRace: modeResult.cleanRace,
+    driftScore: raceTally.driftScore,
+    maxBoostChain: raceTally.maxBoostChain,
+    shortcutRuns: raceTally.shortcutRuns,
+  }, Date.now());
+  if (challengeOutcome) {
+    challengeState = challengeOutcome.state;
+    saveChallengeState(challengeState);
+    if (challengeOutcome.coinReward > 0) {
+      wallet = {
+        ...wallet,
+        coins: Math.min(9_999_999, wallet.coins + challengeOutcome.coinReward),
+        totalEarned: Math.min(9_999_999, wallet.totalEarned + challengeOutcome.coinReward),
+        updatedAt: Date.now(),
+      };
+      walletSync.persist(wallet);
+    }
+    for (const [index, completed] of challengeOutcome.completed.entries()) {
+      setTimeout(() => showCallout(`挑战完成：${completed.label} +${completed.reward}`, 1.7), 3300 + index * 1600);
+    }
+  }
   renderWallet();
   showCallout(
     mode.rivals > 0
@@ -1915,7 +2134,7 @@ raceSystem.on('finish', async (result) => {
     ui.resultTime.textContent = formatTime(modeResult.finalTime);
     ui.bestLap.textContent = formatTime(modeResult.bestLapTime ?? modeResult.totalTime);
     ui.resultScore.textContent = formatScore(modeResult.skillScore);
-    const modeBest = getModeBest(activeMode);
+    const modeBest = activeMode === 'training' ? modeResult.finalTime : getModeBest(activeMode);
     ui.personalBest.textContent = activeMode === 'drift' ? formatScore(modeBest) : formatTime(modeBest ?? modeResult.finalTime);
     ui.recordStatus.textContent = activeMode === 'drift'
       ? recordUpdate.isNewModeBest ? 'NEW HIGH SCORE' : 'HIGH SCORE'
@@ -1952,9 +2171,11 @@ applyEquippedPaint();
 applyEquippedGear();
 ui.hudTrackName.textContent = activeTrack.shortTitle;
 ui.raceFeedTitle.textContent = activeTrack.title;
-ui.raceFeedMeta.textContent = activeTrack.meta;
+ui.raceFeedMeta.textContent = `${activeTrack.meta} // ${activeTrackVariant.label}`;
 document.body.dataset.track = activeTrackId;
+document.body.dataset.trackVariant = activeTrackVariant.id;
 document.body.classList.toggle('online-race', isOnline);
+document.body.classList.toggle('spectator', isSpectator);
 for (const button of document.querySelectorAll('[data-track]')) {
   button.addEventListener('click', () => {
     const nextTrack = button.dataset.track;
@@ -2032,7 +2253,7 @@ function animate() {
     startDelay += dt;
     overtakeCooldown = Math.max(0, overtakeCooldown - dt);
     updateCountdown(dt);
-    vehicle.update(raceStarted ? dt : 0);
+    vehicle.update(!isSpectator && raceStarted ? dt : 0);
     updateRivals(dt);
     itemRace.update(dt, { racing: raceStarted });
     sendOnlineState();

@@ -67,6 +67,7 @@ for (const testCase of cases) {
       };
       update('#masterVolume', 'value', '0.4', 'input');
       update('#soundEnabled', 'checked', false, 'change');
+      update('#difficultySetting', 'value', 'hard', 'change');
       update('#qualitySetting', 'value', 'balanced', 'change');
       update('#vibrationEnabled', 'checked', false, 'change');
       update('#cameraShakeEnabled', 'checked', false, 'change');
@@ -123,6 +124,7 @@ for (const testCase of cases) {
     track: window.__NEON_APEX__.activeTrack,
     laps: window.__NEON_APEX__.raceSystem.totalLaps,
     entrants: window.__NEON_APEX__.raceSystem.state.entrantCount,
+    difficulty: window.__NEON_APEX__.vehicle.state.difficulty,
   }));
   await page.evaluate(() => window.__NEON_APEX__.qaAdvance(7, { throttle: 1, nitro: 1, autopilot: true }));
   const simulationMs = Math.round(performance.now() - caseStartedAt - readyMs);
@@ -381,6 +383,8 @@ for (const result of results) {
   if (result.case === 'desktop') {
     if (!result.settingsState?.inViewport) throw new Error('desktop: settings screen exceeds the viewport');
     if (result.settingsState?.stored?.quality !== 'balanced') throw new Error('desktop: quality setting was not persisted');
+    if (result.settingsState?.stored?.difficulty !== 'hard') throw new Error('desktop: difficulty setting was not persisted');
+    if (result.raceConfig.difficulty !== 'hard') throw new Error('desktop: hard difficulty did not reach vehicle physics');
     if (result.settingsState?.stored?.soundEnabled !== false) throw new Error('desktop: sound setting was not persisted');
     if (result.settingsState?.stored?.cameraShake !== false) throw new Error('desktop: camera setting was not persisted');
     if (!result.settingsState?.backHandled || !result.settingsState?.closedByBack) throw new Error('desktop: Android back did not close settings');

@@ -1,14 +1,42 @@
-# Neon Apex（霓虹竞速）
+# 幻境飞车
 
 一款受《QQ 飞车》操作节奏启发的 3D 街机竞速游戏。项目使用 Three.js 和 Vite 开发，支持桌面浏览器、手机触控以及 Android APK。
 
 > 项目根目录：`/root/neon-apex`
 >
-> 当前版本：`v1.8.1`（Android `versionCode 16`）
+> 当前版本：`v1.10.0`（Android `versionCode 20`）
 >
-> 在线游戏：<https://gaokao.aiimage.icu/>
+> 在线游戏：<https://saiche.aiimage.icu/>
 >
-> Android 下载：[APK](https://gaokao.aiimage.icu/downloads/neon-apex-release.apk) · [AAB](https://gaokao.aiimage.icu/downloads/neon-apex-release.aab)
+> Android 下载：[APK](https://saiche.aiimage.icu/downloads/neon-apex-release.apk) · [AAB](https://saiche.aiimage.icu/downloads/neon-apex-release.aab)
+
+## v1.10.0 更新
+
+- 联机好友房支持可选密码、房主移出车手和独立观战席位；观战者不占 6 人参赛名额、不阻塞准备、不上报车辆状态，比赛中途加入也能直接加载赛道并跟随远端车辆
+- 新增观战运行时与房间控制回归测试，覆盖错误密码、房主权限、观战快照过滤、镜像赛道同步和排行榜公开字段
+- 新手训练、每日/每周挑战、正向/反向/镜像赛道、长地图导航、困难模式和卡丁车碰撞体验完成整合，Android 包同步更新至 `1.10.0 (20)`
+
+## v1.9.2 更新
+
+- 产品中文名统一为「幻境飞车」，同步首页、比赛 HUD、加载页、网页标题与 Android 桌面名称
+- 补充中文搜索描述、关键词、canonical、Open Graph、Twitter 分享卡片与 VideoGame 结构化数据
+- 新增可安装网站清单和「幻」字网页/Android 自适应图标，保留原应用包名与存档键以支持无损升级
+
+## v1.9.1 更新
+
+- 设置新增全地图通用的驾驶难度，默认保持「简单」；玩家可在首页设置中切换「困难」，比赛中修改也会立即应用
+- 困难模式撞击赛道墙体时会按撞击强度额外减速；若正在漂移，本次漂移增加的氮气会被撤销并停止继续集气，松开漂移后下一次漂移恢复正常
+- 撞墙不会扣除漂移前已经持有的氮气；简单模式保持原有宽容规则
+
+## v1.9.0 更新
+
+- 新增「卡丁车」模式：3 圈、6 车，玩家、AI 与联机远端车辆之间允许真实接触；正面碰撞明显掉速，追尾会损失动量，侧撞会造成横移和偏航，0.3 秒接触冷却避免连续帧反复弹飞
+- 新增第六张地图「糖果湾」：独立 1671m 闭环路线，粉红/薄荷/柠檬/天蓝配色，含上下浮动的棒棒糖与气球、旋转风车和缓慢移动云层
+- 新增第七张地图「糖果王国」：4867m 长距离巡游路线，20 个控制点形成连续 S 弯、左右发卡和回头弯，曲率方向至少切换 10 次；场景包含糖果屋村落、糖霜城堡、巧克力湖、甜筒山、甜甜圈门和软糖森林
+- 卡丁模式允许在糖果湾与糖果王国之间选择；联机房间的 `create`、`prepare`、`race-start` 与断线恢复会同步 `kart` 和所选糖果地图
+- 比赛音乐支持授权音频随机歌单：每场随机选一首并循环播放，浏览器拒绝自动播放时会在下一次键盘或触屏操作后重试；空歌单或资源失败时自动回退到原程序化 BGM
+- 卡丁车成绩独立保存为 `kartBest`，全模式成就现覆盖竞速、卡丁车、道具、计时和漂移五种模式
+- 新增卡丁碰撞、联机卡丁协议、随机歌单和两张糖果地图动画测试，`npm test` 当前覆盖 28 组逻辑与协议回归
 
 ## v1.8.1 更新
 
@@ -140,7 +168,7 @@
 - 首页改为轻量启动层，用户点击“开始比赛”后才加载 Three.js、车辆、赛道和 HDRI
 - Android release 改用独立 RSA-4096 正式证书，APK 支持 v2/v3 签名
 - 同时生成可直接安装的 APK 和用于 Play Store 的 AAB
-- 新增 `NA` 霓虹自适应桌面图标，支持圆形裁切与 Android 13 主题图标
+- 新增霓虹自适应桌面图标，支持圆形裁切与 Android 13 主题图标
 - 修复从比赛返回首页后“开始比赛”按钮仍处于禁用状态的问题
 - Android 版本更新为 `1.1.1 (3)`
 
@@ -148,9 +176,9 @@
 
 - 三圈完整比赛流程：倒计时、排名、计时、检查点、冲线结算和重新开始
 - 独立游戏首页，确认开始后才加载重型 3D 运行时并进入比赛倒计时
-- 四种赛事模式：3 圈多人竞速、3 圈道具赛、单圈计时赛和单圈漂移挑战
+- 五种赛事模式：3 圈多人竞速、3 圈卡丁碰碰赛、3 圈道具赛、单圈计时赛和单圈漂移挑战
 - QQ飞车式喷射体系：小喷、双喷、CWW/WCW、连喷、起步喷、落地喷与漂移集气阶段
-- 五图程序化加速带、飞跃台与弯道近道，腾空物理与落地喷判定
+- 七图程序化加速带、飞跃台与弯道近道，腾空物理与落地喷判定
 - AI 对手会走加速带、飞跃台并按机关调整走线
 - 四台可选车型与五维属性差异，首页车库选车
 - 改装商店：金币结算，车辆/车漆/贴花/轮毂/尾翼/喇叭六类共 26 件商品
@@ -158,14 +186,14 @@
 - 快速排位联机：按段位匹配，服务端结算段位分
 - 车手账号：用户名/密码注册登录、跨设备会话、账号绑定在线段位，金币与已购道具跨设备同步
 - 影子挑战幽灵回放、本地排位段位、程序化 BGM 与中文播报语音（女声/原声双音色）
-- 2–6 人房间码联机好友赛，包含同步发车、实时车辆状态、排名和断线恢复
+- 2–6 人房间码联机好友赛，包含普通竞速与卡丁车规则、同步发车、实时车辆状态、排名和断线恢复
 - 6 车同场竞速，包含 AI 超车、封堵和动态车道策略
 - 街机驾驶手感：加速、制动、倒车、转向、漂移和氮气加速
 - 漂移积分、连击倍率、漂移氮气充能、氮气衔接以及错误路线重生
 - 道具箱、氮气瓶、能量盾、电磁脉冲、冲击波、追踪导弹、香蕉皮、水炸弹和名次加权发放
-- 分模式保存最佳总时间、计时赛纪录、漂移最高分、最佳圈速和胜场
+- 分模式保存普通竞速、卡丁车、道具赛、计时赛、漂移赛纪录，以及最佳圈速和胜场
 - 持久化声音、音乐、播报、播报音色、幽灵、音量、画质、触感反馈、镜头震动、车型和上次赛事模式
-- 五张独立地图：夜港、晴川、雪岭极光、赤砂峡谷和蔚蓝海岸
+- 七张独立地图：夜港、晴川、雪岭极光、赤砂峡谷、蔚蓝海岸、糖果湾和糖果王国
 - 三张新地图包含独立路线、PBR 路面、程序化地形、动态天气/水面和大型地标
 - 动态追尾镜头、胎痕烟雾火花、速度线、粒子、Bloom、GTAO、SMAA 和基于速度的后处理
 - 键盘与多点触控操作，适配竖屏和横屏手机
@@ -245,7 +273,7 @@ npm run test:visual
 # 道具赛桌面/手机流程、布局和画布回归
 BASE_URL=http://127.0.0.1:4175 npm run test:item-browser
 
-# 五地图封面、选择器和桌面/手机横屏实时画布回归
+# 七地图封面、选择器和桌面/手机横屏实时画布回归
 BASE_URL=http://127.0.0.1:4175 npm run test:maps-browser
 
 # 港口、城市和山路分段截图
@@ -310,6 +338,7 @@ neon-apex/
 │   ├── driving.js             # 车辆物理、输入、漂移、喷射体系、机关与检查点逻辑
 │   ├── race-modes.js          # 赛事模式的共享定义
 │   ├── race-system.js         # AI 对手、排名和比赛结果
+│   ├── kart-collision.js      # 单机/联机卡丁车辆接触、冲量与冷却
 │   ├── item-race.js           # 道具箱、道具效果、投射物和 AI 道具行为
 │   ├── car-catalog.js         # 四台车型目录、属性乘数与车库数据
 │   ├── shop.js                # 商店商品目录、金币结算与购买装备逻辑
@@ -324,12 +353,15 @@ neon-apex/
 │   ├── ghost.js               # 影子挑战录制、压缩序列化与回放
 │   ├── ranked.js              # 本地排位段位与积分逻辑
 │   ├── music.js               # 五图程序化 BGM 合成器
+│   ├── race-playlist.js       # 比赛授权音乐随机歌单与程序化 BGM 降级
 │   ├── world.js               # 夜港场景总装配与兼容导出
 │   ├── night-track.js         # 夜港赛道曲线与通用放置几何
 │   ├── night-atmosphere.js    # 夜空、雨、星体和灯光
 │   ├── night-districts.js     # 港口、跨桥和山路分区
 │   ├── procedural-vehicle.js  # 程序化主车、车型变体与 AI 车辆
 │   ├── day-world.js           # 独立白天山谷赛道与场景
+│   ├── candy-world.js         # 糖果湾闭环路线与程序化动画场景
+│   ├── candy-kingdom-world.js # 4.9km 糖果王国长赛道、糖果屋村落与地标
 │   ├── scenic-worlds.js       # 雪岭、峡谷、海岸路线与高细节场景
 │   ├── track-catalog.js       # 首页与运行时共享的地图信息
 │   ├── multiplayer-client.js  # 房间连接、同步与断线恢复
@@ -343,7 +375,7 @@ neon-apex/
 │   ├── telemetry.js           # WebGL 性能与错误监控
 │   └── style.css              # HUD、车库和响应式触控布局
 ├── public/assets/             # 车辆、地图封面、HDRI、PBR 材质与播报语音资源
-│   └── audio/                 # voice/（原声）与 voice-female/（女声）两套播报
+│   └── audio/                 # music/ 比赛歌单及两套 voice 播报
 ├── tests/                     # 逻辑、触控和 Playwright 视觉测试
 ├── server/                    # 2–6 人房间和 WebSocket 状态服务
 │   ├── auth-store.mjs         # scrypt 密码、账号和哈希会话持久化
@@ -361,6 +393,21 @@ neon-apex/
 ## 美术资源与许可
 
 主车辆使用 Khronos glTF Sample Assets 的 **Car Concept**，遵循 CC BY 4.0。环境材质来自 Poly Haven。具体来源、许可和文件校验信息见 [`public/assets/ASSET-LICENSES.md`](public/assets/ASSET-LICENSES.md)。主车辆加载失败时，游戏会自动切换到程序化备用车辆。
+
+### 比赛音乐
+
+授权音乐放在 `public/assets/audio/music/`，并登记到同目录的 `manifest.json`。每次开始比赛会随机选择一首；同一首在本场循环播放，下一场重新随机。清单为空、文件加载失败或浏览器拒绝媒体播放时，游戏自动使用原有程序化 BGM。
+
+```json
+{
+  "tracks": [
+    { "file": "track-01.mp3", "title": "Track 01" },
+    { "file": "track-02.ogg", "title": "Track 02" }
+  ]
+}
+```
+
+仅可将拥有公开分发授权的 `mp3`、`ogg` 或 `m4a` 文件打入网站和 Android 安装包。播放器不处理 QQ 音乐等平台的 DRM 或加密缓存文件；歌曲来源于平台并不自动包含再分发许可。
 
 ### 播报语音
 
@@ -385,7 +432,7 @@ python3 -m venv /tmp/ttsenv && /tmp/ttsenv/bin/pip install edge-tts
 GitHub Actions 工作流 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在推送到 `main` 和所有 Pull Request 上触发，使用 Node.js 20 依次执行：
 
 1. `npm ci` 按 `package-lock.json` 安装依赖（带 npm 缓存）
-2. `npm test` 跑完 22 套纯 Node 逻辑测试（赛制、账号、钱包同步、语音包、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
+2. `npm test` 跑完 28 套纯 Node 逻辑测试（赛制、卡丁碰撞、联机卡丁、歌单、账号、钱包同步、语音包、纪录、赛道、地形、幽灵、段位、商店、道具、联机、触控、键盘等）
 3. `npm run build` 生产构建
 4. 校验构建产物：`dist/index.html` 以及 `dist/assets` 下的 `.js` 与 `.css` 均存在且非空
 
@@ -422,7 +469,7 @@ npm run deploy:server
 
 网页部署脚本会原子切换 `/opt/neon-apex/dist` 并执行线上资源一致性验证；联机部署脚本会原子切换 `/opt/neon-apex/multiplayer/current`、重启 systemd 服务并检查本地健康端点。账号和段位文件位于不会随 release 切换的 `/opt/neon-apex/multiplayer/data`，部署脚本会安装 systemd `ReadWritePaths` 白名单并把该目录限制给 `www-data`。Caddy 将 `/multiplayer`（含账号 API）和 `/multiplayer/healthz` 反向代理到 `127.0.0.1:3010`。不要在未配置对应域名和目录的机器上直接执行。
 
-线上健康标记：<https://gaokao.aiimage.icu/.well-known/neon-apex-health.json>
+线上健康标记：<https://saiche.aiimage.icu/.well-known/neon-apex-health.json>
 
 ## 飞书交付
 
@@ -432,7 +479,7 @@ npm run deploy:server
 cc-connect daemon status
 cc-connect sessions list
 cc-connect send -p codex-relay_d03f2587 \
-  -m "Neon Apex v1.4.2 两指漂移 release" \
+  -m "幻境飞车 v1.10.0 Android release" \
   --file /root/neon-apex/artifacts/apk/neon-apex-release.apk
 ```
 

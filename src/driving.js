@@ -21,6 +21,9 @@ const DEFAULTS = Object.freeze({
   nitroAcceleration: 25,
   nitroSpeedMultiplier: 1.28,
   nitroCapacity: 100,
+  // Keep the boost trigger aligned with the rounded HUD value. A tiny
+  // remainder should not produce a visible extra boost frame.
+  nitroActivationThreshold: 0.5,
   nitroDrainRate: 25,
   nitroRechargeRate: 1.4,
   driftNitroBaseRate: 5,
@@ -34,6 +37,10 @@ const DEFAULTS = Object.freeze({
   collisionRestitution: 0.12,
   collisionSpeedRetention: 0.72,
   collisionCooldown: 0.28,
+  collisionMass: 1,
+  difficulty: 'easy',
+  hardWallSpeedRetentionMin: 0.48,
+  hardWallSpeedRetentionMax: 0.82,
   rideHeight: 0,
   totalLaps: 3,
   checkpointCount: 16,
@@ -118,6 +125,7 @@ function horizontalLength(vector) {
 export class ArcadeVehicle {
   constructor(options = {}) {
     this.config = { ...DEFAULTS, ...options };
+    this.config.difficulty = options.difficulty === 'hard' ? 'hard' : 'easy';
     this.object = options.object ?? null;
     this.position = new THREE.Vector3();
     this.velocity = new THREE.Vector3();
@@ -160,6 +168,7 @@ export class ArcadeVehicle {
     this._driftSessionTime = 0;
     this._driftSessionNitro = 0;
     this._driftChargeGross = 0;
+    this._driftNitroInvalidated = false;
     this._pendingNitroLinks = 0;
     this._featureZones = null;
     this._padCooldowns = new Map();
@@ -220,7 +229,9 @@ export class ArcadeVehicle {
       lastDriftScore: 0,
       driftDuration: 0,
       driftNitroEarned: 0,
+      driftNitroInvalidated: false,
       lastDriftNitro: 0,
+      difficulty: this.config.difficulty,
       skillScore: 0,
       combo: 0,
       comboMultiplier: 1,
@@ -502,6 +513,32 @@ export class ArcadeVehicle {
     return true;
   }
 
+  /** Applies the short impulse used by the contact-racing ruleset. */
+  applyKartImpact({ impulse = null, lateralImpulse = 0, yawImpulse = 0, impact = 0, source = 'kart', collisionType = 'side' } = {}) {
+    const amount = Math.max(0, Number(impact) || 0);
+    if (impulse?.isVector3) this.velocity.addScaledVector(impulse, 0.72);
+    _forward.set(Math.sin(this.heading), 0, Math.cos(this.heading));
+    _right.set(_forward.z, 0, -_forward.x);
+    this.velocity.addScaledVector(_right, Number(lateralImpulse) || 0);
+    this.yawRate += Number(yawImpulse) || 0;
+    this.state.collisionImpact = Math.max(this.state.collisionImpact, clamp01(amount / 2));
+    if (amount > 0.25 && this._collisionCooldown <= 0) {
+      this._collisionCooldown = this.config.collisionCooldown;
+      this.state.collisionCount += 1;
+      this._breakSkillChain('collision');
+      this._emit('collision', {
+        impact: amount,
+        normalizedImpact: clamp01(amount / 2),
+        headOnRatio: 0,
+        side: lateralImpulse < 0 ? 'left' : 'right',
+        source,
+        collisionType,
+        state: this.getSnapshot(),
+      });
+    }
+    return this;
+  }
+
   setInput(values = {}) {
     for (const name of CONTROL_NAMES) {
       if (!(name in values)) continue;
@@ -565,13 +602,24 @@ export class ArcadeVehicle {
       refresh();
     };
 
-    target.addEventListener('keydown', onKeyDown, { passive: false });
-    target.addEventListener('keyup', onKeyUp, { passive: false });
+    // Capture key events before a focused control can stop propagation. This
+    // is especially important for Space, whose keyup can otherwise be lost
+    // when a menu or button takes focus during a race.
+    target.addEventListener('keydown', onKeyDown, { capture: true, passive: false });
+    target.addEventListener('keyup', onKeyUp, { capture: true, passive: false });
     target.addEventListener('blur', onBlur);
+    const ownerDocument = target.document;
+    const onVisibilityChange = () => {
+      if (ownerDocument?.hidden) onBlur();
+    };
+    ownerDocument?.addEventListener?.('visibilitychange', onVisibilityChange);
+    target.addEventListener('pagehide', onBlur);
     const cleanup = () => {
-      target.removeEventListener('keydown', onKeyDown);
-      target.removeEventListener('keyup', onKeyUp);
+      target.removeEventListener('keydown', onKeyDown, { capture: true });
+      target.removeEventListener('keyup', onKeyUp, { capture: true });
       target.removeEventListener('blur', onBlur);
+      ownerDocument?.removeEventListener?.('visibilitychange', onVisibilityChange);
+      target.removeEventListener('pagehide', onBlur);
       onBlur();
     };
     this._inputCleanup.push(cleanup);
@@ -618,7 +666,12 @@ export class ArcadeVehicle {
 
       const onDown = (event) => {
         active.set(`${controlName}:${event.pointerId}`, binding);
-        element.setPointerCapture?.(event.pointerId);
+        try {
+          element.setPointerCapture?.(event.pointerId);
+        } catch {
+          // Some embedded WebViews and synthetic input drivers reject capture
+          // even though the pointerdown event itself is valid.
+        }
         refresh();
         event.preventDefault();
       };
@@ -675,6 +728,7 @@ export class ArcadeVehicle {
     this.state.lastDriftScore = 0;
     this.state.driftDuration = 0;
     this.state.driftNitroEarned = 0;
+    this.state.driftNitroInvalidated = false;
     this.state.lastDriftNitro = 0;
     this.state.skillScore = 0;
     this.state.combo = 0;
@@ -720,6 +774,7 @@ export class ArcadeVehicle {
     this._driftSessionTime = 0;
     this._driftSessionNitro = 0;
     this._driftChargeGross = 0;
+    this._driftNitroInvalidated = false;
     this._pendingNitroLinks = 0;
     this._previousRacePosition.copy(this.position);
     this._buildRaceCheckpoints(this.state.trackProgress);
@@ -741,6 +796,16 @@ export class ArcadeVehicle {
 
   setPaused(paused = true) {
     this.state.paused = Boolean(paused);
+    return this;
+  }
+
+  setDifficulty(difficulty = 'easy') {
+    this.config.difficulty = difficulty === 'hard' ? 'hard' : 'easy';
+    this.state.difficulty = this.config.difficulty;
+    if (this.config.difficulty === 'easy') {
+      this._driftNitroInvalidated = false;
+      this.state.driftNitroInvalidated = false;
+    }
     return this;
   }
 
@@ -808,6 +873,7 @@ export class ArcadeVehicle {
       this.state.lastDriftScore = 0;
       this.state.driftDuration = 0;
       this.state.driftNitroEarned = 0;
+      this.state.driftNitroInvalidated = false;
       this.state.lastDriftNitro = 0;
       this.state.skillScore = 0;
       this.state.combo = 0;
@@ -840,6 +906,7 @@ export class ArcadeVehicle {
       this._driftSessionTime = 0;
       this._driftSessionNitro = 0;
       this._driftChargeGross = 0;
+      this._driftNitroInvalidated = false;
       this._pendingNitroLinks = 0;
     }
     this._previousRacePosition.copy(this.position);
@@ -1034,7 +1101,11 @@ export class ArcadeVehicle {
     _right.set(_forward.z, 0, -_forward.x);
     forwardSpeed = this.velocity.dot(_forward);
 
-    const boosting = this.input.nitro > 0.5 && this.input.throttle > 0.05 && forwardSpeed > 5 && this.state.nitro > 0;
+    const nitroThreshold = Math.max(EPSILON, Number(this.config.nitroActivationThreshold) || 0.5);
+    const boosting = this.input.nitro > 0.5
+      && this.input.throttle > 0.05
+      && forwardSpeed > 5
+      && this.state.nitro >= nitroThreshold;
     this.state.miniBoostTime = Math.max(0, this.state.miniBoostTime - delta);
     if (this.state.miniBoostTime <= 0) this.state.miniBoostLevel = 0;
     this.state.padBoostTime = Math.max(0, this.state.padBoostTime - delta);
@@ -1102,9 +1173,13 @@ export class ArcadeVehicle {
     if (boosting) {
       const drainScale = Math.max(0.58, 1 - chainLevel * this.config.nitroChainDrainReduction);
       this.state.nitro -= this.config.nitroDrainRate * drainScale * delta;
+      if (this.state.nitro < nitroThreshold) this.state.nitro = 0;
     }
-    else this.state.nitro += this.config.nitroRechargeRate * delta;
-    if (driftRequested && !boosting) {
+    // An empty tank must stay empty while the driver keeps holding boost.
+    // Otherwise passive recharge reaches the activation threshold every few
+    // frames and creates repeated boost pulses even though the HUD reads 0.
+    else if (this.input.nitro <= 0.5) this.state.nitro += this.config.nitroRechargeRate * delta;
+    if (driftRequested && !boosting && !this._driftNitroInvalidated) {
       const slipQuality = THREE.MathUtils.smoothstep(Math.abs(lateralSpeed), 0.4, 8);
       const steeringQuality = THREE.MathUtils.smoothstep(Math.abs(this.steering), 0.08, 0.72);
       const driftRate = this.config.driftNitroBaseRate
@@ -1237,16 +1312,39 @@ export class ArcadeVehicle {
       this._collisionCooldown = this.config.collisionCooldown;
       this.state.collisionCount += 1;
       this.state.collisionImpact = Math.max(this.state.collisionImpact, collisionImpact);
+      const driftNitroCancelled = this._applyHardWallPenalty(collisionImpact);
       if (impact > 4) this._breakSkillChain('collision');
       this._emit('collision', {
         impact,
         normalizedImpact: collisionImpact,
         headOnRatio,
         side: sign < 0 ? 'left' : 'right',
+        driftNitroCancelled,
         state: this.getSnapshot(),
       });
     }
     return this.velocity.dot(_outward);
+  }
+
+  _applyHardWallPenalty(normalizedImpact) {
+    if (this.config.difficulty !== 'hard') return false;
+
+    const retention = THREE.MathUtils.lerp(
+      this.config.hardWallSpeedRetentionMax,
+      this.config.hardWallSpeedRetentionMin,
+      clamp01(normalizedImpact),
+    );
+    this.velocity.multiplyScalar(THREE.MathUtils.clamp(retention, 0, 1));
+
+    if (this._driftNitroInvalidated || !(this.state.isDrifting || this.input.drift > 0.5)) return false;
+    this.nitro = this.state.nitro - this._driftSessionNitro;
+    this._driftSessionNitro = 0;
+    this._driftChargeGross = 0;
+    this._driftNitroInvalidated = true;
+    this.state.driftNitroEarned = 0;
+    this.state.driftNitroInvalidated = true;
+    this.state.chargeLevel = 0;
+    return true;
   }
 
   _applyTrackConstraint(delta) {
@@ -1800,6 +1898,10 @@ export class ArcadeVehicle {
     }
     this._wasDrifting = scoredDrift;
     this._wasBoosting = this.state.isBoosting;
+    if (!this.state.isDrifting && this.input.drift <= 0.5 && this._driftNitroInvalidated) {
+      this._driftNitroInvalidated = false;
+      this.state.driftNitroInvalidated = false;
+    }
   }
 
   _bankDrift() {
@@ -1807,10 +1909,12 @@ export class ArcadeVehicle {
       this._driftSessionTime >= this.config.minScoredDriftTime
       && this._driftSessionScore >= 10
     ) {
-      const beforeNitro = this.state.nitro;
-      const bankBonus = Math.min(12, this._driftSessionTime * this.config.driftNitroBankRate);
-      this.nitro += bankBonus;
-      this._driftSessionNitro += Math.max(0, this.state.nitro - beforeNitro);
+      if (!this._driftNitroInvalidated) {
+        const beforeNitro = this.state.nitro;
+        const bankBonus = Math.min(12, this._driftSessionTime * this.config.driftNitroBankRate);
+        this.nitro += bankBonus;
+        this._driftSessionNitro += Math.max(0, this.state.nitro - beforeNitro);
+      }
       this.state.lastDriftNitro = this._driftSessionNitro;
       this.state.combo = Math.min(this.config.maxCombo, this.state.combo + 1);
       this.state.comboMultiplier = 1 + (this.state.combo - 1) * 0.25;
@@ -1826,6 +1930,7 @@ export class ArcadeVehicle {
         combo: this.state.combo,
         multiplier: this.state.comboMultiplier,
         nitro: Math.round(this._driftSessionNitro),
+        nitroInvalidated: this._driftNitroInvalidated,
         state: this.getSnapshot(),
       });
     }

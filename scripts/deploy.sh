@@ -5,7 +5,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_ROOT="/opt/neon-apex"
 TARGET_DIR="${TARGET_ROOT}/dist"
 RELEASE_DIR="${TARGET_ROOT}/releases"
-SITE_URL="${SITE_URL:-https://gaokao.aiimage.icu}"
+SITE_URL="${SITE_URL:-https://saiche.aiimage.icu}"
 SITE_HTTP_URL="${SITE_HTTP_URL:-${SITE_URL/https:/http:}}"
 REQUEST_INTERVAL_SECONDS="${REQUEST_INTERVAL_SECONDS:-13}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -94,7 +94,7 @@ ACTIVATED=1
 
 REMOTE_INDEX="${VERIFY_DIR}/index.html"
 limited_curl --fail --silent --show-error "${SITE_URL}/" --output "${REMOTE_INDEX}"
-grep -q 'NEON APEX' "${REMOTE_INDEX}"
+grep -q '幻境飞车' "${REMOTE_INDEX}"
 HTTP_RESULT_FILE="${VERIFY_DIR}/http-result.txt"
 limited_curl --fail --silent --show-error --head --max-time 15 --write-out '%{http_code} %{redirect_url}' --output /dev/null "${SITE_HTTP_URL}/" > "${HTTP_RESULT_FILE}"
 HTTP_RESULT="$(<"${HTTP_RESULT_FILE}")"
@@ -122,7 +122,7 @@ if [[ -s "${AAB_FILE}" ]]; then
 fi
 REMOTE_DEEP_LINK="${VERIFY_DIR}/deep-link.html"
 limited_curl --fail --silent --show-error "${SITE_URL}/race/deep-link-check" --output "${REMOTE_DEEP_LINK}"
-grep -q 'NEON APEX' "${REMOTE_DEEP_LINK}"
+grep -q '幻境飞车' "${REMOTE_DEEP_LINK}"
 
 echo "Deployed ${STAMP} to ${SITE_URL}"
 rm -rf -- "${VERIFY_DIR}"

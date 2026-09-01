@@ -114,6 +114,15 @@ for (const playerId of [ALPHA_ID, BETA_ID]) {
   }
 }
 assert.equal(seedState.points, 60);
+const topRows = seedStore.leaderboard(1);
+assert.equal(topRows.length, 1, 'leaderboard limit is enforced');
+assert.equal(topRows[0].position, 1);
+assert.equal(topRows[0].points, 60);
+assert.equal(topRows[0].wins, 2);
+assert.equal(Object.hasOwn(topRows[0], 'playerId'), false, 'public leaderboard must not expose player ids');
+const emptyLeaderboard = createRankedStore({ filePath: join(dataDir, 'empty.json'), flushIntervalMs: 0 });
+assert.deepEqual(emptyLeaderboard.leaderboard(), [], 'empty leaderboard is stable');
+emptyLeaderboard.close();
 seedStore.close();
 
 // ⑤ 落盘后重新打开能读回（进程内先验一次，服务端重启再验一次）

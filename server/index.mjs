@@ -30,7 +30,10 @@ const AUTH_BODY_BYTES = 4096;
 const AUTH_COOKIE = 'neon_apex_session';
 const AUTH_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 const MAX_INVALID_STATES = 8;
-const MAP_IDS = new Set(['night', 'day', 'alpine', 'canyon', 'coast']);
+const MAP_IDS = new Set(['night', 'day', 'alpine', 'canyon', 'coast', 'candy', 'candyland']);
+const KART_MAPS = Object.freeze(['candy', 'candyland']);
+const RACE_MODE_IDS = new Set(['race', 'kart']);
+const TRACK_VARIANT_IDS = new Set(['normal', 'reverse', 'mirror']);
 // Ranked (quick match) knobs.
 const RANKED_MIN_PLAYERS = 2;
 const RANKED_FILL_MS = envInteger('NEON_APEX_RANKED_FILL_MS', 6000, 100, 120000);
@@ -290,8 +293,24 @@ function sanitizeName(value) {
   return normalized || `车手${Math.floor(Math.random() * 900 + 100)}`;
 }
 
+function sanitizeRoomPassword(value) {
+  return String(value || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 16);
+}
+
 function normalizeMap(value) {
   return MAP_IDS.has(value) ? value : 'night';
+}
+
+function normalizeKartMap(value) {
+  return KART_MAPS.includes(value) ? value : 'candy';
+}
+
+function normalizeRaceMode(value) {
+  return RACE_MODE_IDS.has(value) ? value : 'race';
+}
+
+function normalizeTrackVariant(value) {
+  return TRACK_VARIANT_IDS.has(value) ? value : 'normal';
 }
 
 function generateRoomCode() {
@@ -307,19 +326,23 @@ function generateRoomCode() {
 
 function serializeRoom(room) {
   const connected = connectedPlayers(room);
+  const participants = connected.filter((player) => !player.spectator);
   return {
     code: room.code,
     map: room.map,
+    trackVariant: room.trackVariant,
     phase: room.phase,
     hostId: room.hostId,
     mode: room.mode,
+    raceMode: room.raceMode,
+    passwordProtected: Boolean(room.password),
     ranked: room.mode === 'ranked',
     minPlayers: room.mode === 'ranked' ? RANKED_MIN_PLAYERS : 2,
     maxPlayers: MAX_PLAYERS,
     autoStartAt: room.autoStartAt ?? null,
     raceId: room.raceId ?? null,
-    connectedCount: connected.length,
-    readyCount: connected.filter((player) => player.ready).length,
+    connectedCount: participants.length,
+    readyCount: participants.filter((player) => player.ready).length,
     players: [...room.players.values()].map((player) => ({
       id: player.id,
       name: player.name,
@@ -331,6 +354,7 @@ function serializeRoom(room) {
       rank: describeRank(rankedStore.get(player.rankedId)),
       hasRank: Boolean(player.rankedId),
       registered: Boolean(player.accountId),
+      spectator: Boolean(player.spectator),
     })),
   };
 }
@@ -364,7 +388,7 @@ function attachPlayer(socket, room, player) {
   player.disconnectedAt = null;
 }
 
-function createPlayer(name, index, rankedId = null, account = null) {
+function createPlayer(name, index, rankedId = null, account = null, spectator = false) {
   const palette = [0x04cbe5, 0xff4f61, 0xf2b84b, 0x7d5cff, 0x30bd78, 0xe773d2];
   return {
     id: randomUUID(),
@@ -382,16 +406,21 @@ function createPlayer(name, index, rankedId = null, account = null) {
     lastSequence: -1,
     lastStateAt: null,
     invalidStateCount: 0,
+    spectator: Boolean(spectator),
   };
 }
 
-function createRoom({ map, mode = 'friendly', bucket = 0 }) {
+function createRoom({ map, mode = 'friendly', raceMode = 'race', trackVariant = 'normal', password = '', bucket = 0 }) {
   const code = generateRoomCode();
+  const normalizedRaceMode = normalizeRaceMode(raceMode);
   const room = {
     code,
-    map: normalizeMap(map),
+    map: normalizedRaceMode === 'kart' ? normalizeKartMap(map) : normalizeMap(map),
     phase: 'lobby',
     mode,
+    raceMode: normalizedRaceMode,
+    trackVariant: normalizeTrackVariant(trackVariant),
+    password: sanitizeRoomPassword(password),
     bucket,
     hostId: null,
     players: new Map(),
@@ -433,7 +462,14 @@ function onCreate(socket, message) {
   if (rooms.size >= MAX_ROOMS) {
     return send(socket, { type: 'error', code: 'SERVER_BUSY', message: '比赛房间已满，请稍后重试' });
   }
-  const room = createRoom({ map: message.map, mode: 'friendly' });
+  const requestedRaceMode = normalizeRaceMode(message.raceMode);
+  const room = createRoom({
+    map: message.map,
+    mode: 'friendly',
+    raceMode: requestedRaceMode,
+    trackVariant: message.trackVariant,
+    password: message.password,
+  });
   const player = createPlayer(message.name, 0, message.playerId, socket.account);
   room.hostId = player.id;
   room.players.set(player.id, player);
@@ -451,13 +487,25 @@ function onJoin(socket, message) {
   const room = rooms.get(code);
   if (!room) return send(socket, { type: 'error', code: 'ROOM_NOT_FOUND', message: '没有找到这个房间' });
   if (room.mode === 'ranked') return send(socket, { type: 'error', code: 'ROOM_NOT_FOUND', message: '没有找到这个房间' });
-  if (room.phase !== 'lobby') return send(socket, { type: 'error', code: 'RACE_STARTED', message: '比赛已经开始' });
-  if (room.players.size >= MAX_PLAYERS) return send(socket, { type: 'error', code: 'ROOM_FULL', message: '房间已满（最多 6 人）' });
-  const player = createPlayer(message.name, room.players.size, message.playerId, socket.account);
+  const spectator = message.spectator === true;
+  if (room.phase !== 'lobby' && !spectator) return send(socket, { type: 'error', code: 'RACE_STARTED', message: '比赛已经开始' });
+  if (room.phase === 'finished') return send(socket, { type: 'error', code: 'RACE_FINISHED', message: '比赛已经结束' });
+  if (room.password && sanitizeRoomPassword(message.password) !== room.password) {
+    return send(socket, { type: 'error', code: 'BAD_PASSWORD', message: '房间密码不正确' });
+  }
+  if (!spectator && participantPlayers(room).length >= MAX_PLAYERS) return send(socket, { type: 'error', code: 'ROOM_FULL', message: '房间已满（最多 6 人）' });
+  const player = createPlayer(message.name, room.players.size, message.playerId, socket.account, spectator);
   room.players.set(player.id, player);
   attachPlayer(socket, room, player);
   send(socket, {
     type: 'joined', selfId: player.id, reconnectToken: player.reconnectToken, room: serializeRoom(room),
+  });
+  if (spectator && (room.phase === 'loading' || room.phase === 'racing')) send(socket, {
+    type: 'prepare', map: room.map, raceMode: room.raceMode, trackVariant: room.trackVariant,
+  });
+  if (spectator && room.phase === 'racing') send(socket, {
+    type: 'race-start', raceId: room.raceId, startAt: room.startAt,
+    map: room.map, raceMode: room.raceMode, trackVariant: room.trackVariant,
   });
   broadcastRoom(room);
 }
@@ -475,7 +523,13 @@ function onResume(socket, message) {
     type: 'resumed', selfId: player.id, reconnectToken: player.reconnectToken, room: serializeRoom(room),
   });
   if (room.phase === 'racing') {
-    send(socket, { type: 'race-start', raceId: room.raceId, startAt: room.startAt, map: room.map });
+    if (player.spectator) send(socket, {
+      type: 'prepare', map: room.map, raceMode: room.raceMode, trackVariant: room.trackVariant,
+    });
+    send(socket, {
+      type: 'race-start', raceId: room.raceId, startAt: room.startAt,
+      map: room.map, raceMode: room.raceMode, trackVariant: room.trackVariant,
+    });
   } else if (room.phase === 'finished' && room.raceResult) {
     // A finisher may lose the socket while the remaining grid is still racing.
     // Replay the immutable settlement after resume; clients dedupe by settlementId.
@@ -494,11 +548,15 @@ function beginRace(room) {
   room.autoStartTimer = null;
   for (const entry of room.players.values()) entry.ready = false;
   broadcastRoom(room);
-  broadcast(room, { type: 'prepare', map: room.map });
+  broadcast(room, { type: 'prepare', map: room.map, raceMode: room.raceMode, trackVariant: room.trackVariant });
 }
 
 function connectedPlayers(room) {
   return [...room.players.values()].filter((entry) => entry.socket);
+}
+
+function participantPlayers(room) {
+  return connectedPlayers(room).filter((entry) => !entry.spectator);
 }
 
 // --- ranked quick match -----------------------------------------------------
@@ -528,11 +586,11 @@ function bucketTolerance(room, now) {
   return Math.floor(Math.max(0, now - room.createdAt) / RANKED_WIDEN_MS);
 }
 
-function findRankedRoom(bucket, rankedId, now = Date.now()) {
+function findRankedRoom(bucket, rankedId, raceMode = 'race', now = Date.now()) {
   let best = null;
   let bestScore = null;
   for (const room of rooms.values()) {
-    if (room.mode !== 'ranked' || room.phase !== 'lobby') continue;
+    if (room.mode !== 'ranked' || room.phase !== 'lobby' || room.raceMode !== raceMode) continue;
     if (room.players.size >= MAX_PLAYERS) continue;
     if ([...room.players.values()].some((entry) => entry.rankedId === rankedId)) continue;
     const distance = Math.abs(bucket - room.bucket);
@@ -584,14 +642,18 @@ function onQuickMatch(socket, message) {
   // message.rankPoints may be present but is deliberately ignored: the stored
   // rank is the only source of truth for matchmaking and settlement.
   const bucket = rankOrdinal(rankedStore.get(rankedId));
-  let room = findRankedRoom(bucket, rankedId);
+  const raceMode = normalizeRaceMode(message.raceMode);
+  let room = findRankedRoom(bucket, rankedId, raceMode);
   if (!room) {
     if (rooms.size >= MAX_ROOMS) {
       return send(socket, { type: 'error', code: 'SERVER_BUSY', message: '比赛房间已满，请稍后重试' });
     }
     room = createRoom({
-      map: RANKED_MAPS[Math.floor(Math.random() * RANKED_MAPS.length)],
+      map: raceMode === 'kart'
+        ? KART_MAPS[Math.floor(Math.random() * KART_MAPS.length)]
+        : RANKED_MAPS[Math.floor(Math.random() * RANKED_MAPS.length)],
       mode: 'ranked',
+      raceMode,
       bucket,
     });
   }
@@ -630,17 +692,36 @@ function onStart(socket) {
   if (!context) return;
   const { room, player } = context;
   if (room.hostId !== player.id) return send(socket, { type: 'error', code: 'HOST_ONLY', message: '只有房主可以开始比赛' });
-  if (connectedPlayers(room).length < 2) return send(socket, { type: 'error', code: 'NEED_PLAYERS', message: '至少需要 2 名车手' });
+  if (participantPlayers(room).length < 2) return send(socket, { type: 'error', code: 'NEED_PLAYERS', message: '至少需要 2 名车手' });
   if (room.phase !== 'lobby') return;
   beginRace(room);
+}
+
+function onKick(socket, message) {
+  const context = socketPlayer(socket);
+  if (!context || context.room.phase !== 'lobby') return;
+  if (context.room.hostId !== context.player.id) {
+    return send(socket, { type: 'error', code: 'HOST_ONLY', message: '只有房主可以移出车手' });
+  }
+  const target = context.room.players.get(String(message.playerId || ''));
+  if (!target || target.id === context.player.id) return;
+  send(target.socket, { type: 'kicked', message: '你已被房主移出房间' });
+  const targetSocket = target.socket;
+  removePlayer(context.room, target.id);
+  if (targetSocket) {
+    targetSocket.roomCode = null;
+    targetSocket.playerId = null;
+    targetSocket.close(4003, 'kicked');
+  }
 }
 
 function onReady(socket) {
   const context = socketPlayer(socket);
   if (!context || context.room.phase !== 'loading') return;
+  if (context.player.spectator) return;
   context.player.ready = true;
   broadcastRoom(context.room);
-  const connected = connectedPlayers(context.room);
+  const connected = participantPlayers(context.room);
   if (connected.length < 2 || !connected.every((player) => player.ready)) return;
   context.room.phase = 'racing';
   context.room.startAt = Date.now() + START_DELAY_MS;
@@ -662,13 +743,14 @@ function onReady(socket) {
   context.room.settled = false;
   broadcastRoom(context.room);
   broadcast(context.room, {
-    type: 'race-start', raceId: context.room.raceId, startAt: context.room.startAt, map: context.room.map,
+    type: 'race-start', raceId: context.room.raceId, startAt: context.room.startAt,
+    map: context.room.map, raceMode: context.room.raceMode, trackVariant: context.room.trackVariant,
   });
 }
 
 function onState(socket, message) {
   const context = socketPlayer(socket);
-  if (!context || context.room.phase !== 'racing') return;
+  if (!context || context.room.phase !== 'racing' || context.player.spectator) return;
   const sequence = Math.floor(Number(message.sequence) || 0);
   if (sequence <= context.player.lastSequence) return;
   context.player.lastSequence = sequence;
@@ -830,6 +912,7 @@ function onMessage(socket, raw) {
   else if (message.type === 'cancelQuickMatch') onCancelQuickMatch(socket);
   else if (message.type === 'resume') onResume(socket, message);
   else if (message.type === 'start') onStart(socket);
+  else if (message.type === 'kick') onKick(socket, message);
   else if (message.type === 'ready') onReady(socket);
   else if (message.type === 'state') onState(socket, message);
   else if (message.type === 'ping') {
@@ -852,6 +935,13 @@ const httpServer = createServer(async (request, response) => {
       return json(response, 200, {
         status: 'ok', rooms: rooms.size, connections: webSocketServer.clients.size,
         accounts: authStore.size, uptime: Math.floor(process.uptime()),
+      });
+    }
+    if (path === '/multiplayer/leaderboard' && request.method === 'GET') {
+      return json(response, 200, {
+        season: process.env.NEON_APEX_SEASON || 'S1',
+        refreshedAt: Date.now(),
+        players: rankedStore.leaderboard(50),
       });
     }
     if (path.startsWith('/multiplayer/auth/')) return await handleAuthRequest(request, response, path);

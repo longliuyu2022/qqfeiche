@@ -46,9 +46,9 @@ export const ACHIEVEMENTS = Object.freeze([
   Object.freeze({
     id: 'mode-explorer',
     name: '全能车手',
-    desc: '竞速 / 道具 / 计时 / 漂移四种模式各完赛一次。',
+    desc: '竞速 / 卡丁车 / 道具 / 计时 / 漂移五种模式各完赛一次。',
     category: 'milestone',
-    target: 4,
+    target: 5,
     coinReward: 350,
   }),
   Object.freeze({
@@ -218,7 +218,7 @@ const METRICS = Object.freeze({
 
 const ACHIEVEMENT_INDEX = new Map(ACHIEVEMENTS.map((item, index) => [item.id, index]));
 
-const MODE_IDS = Object.freeze(['race', 'items', 'timeTrial', 'drift']);
+const MODE_IDS = Object.freeze(['race', 'kart', 'items', 'timeTrial', 'drift']);
 // 与 ranked.js 的 RANK_TIERS 顺序保持一致（此处不 import，保持模块零依赖）。
 const RANK_TIER_ORDER = Object.freeze([
   'bronze',

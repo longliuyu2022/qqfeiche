@@ -108,19 +108,19 @@ export class MultiplayerClient extends EventTarget {
     }));
   }
 
-  async createRoom({ name, map }) {
-    return this._request('create', { name, map, ...this._identity() });
+  async createRoom({ name, map, raceMode = 'race', trackVariant = 'normal', password = '' }) {
+    return this._request('create', { name, map, raceMode, trackVariant, password, ...this._identity() });
   }
 
-  async joinRoom({ name, code }) {
-    return this._request('join', { name, code: String(code || '').trim().toUpperCase(), ...this._identity() });
+  async joinRoom({ name, code, password = '', spectator = false }) {
+    return this._request('join', { name, code: String(code || '').trim().toUpperCase(), password, spectator, ...this._identity() });
   }
 
   // Ranked matchmaking: the server picks the room, the map and the start time.
-  async quickMatch({ name } = {}) {
+  async quickMatch({ name, raceMode = 'race' } = {}) {
     this.matching = true;
     try {
-      const room = await this._request('quickMatch', { name, ...this._identity() });
+      const room = await this._request('quickMatch', { name, raceMode, ...this._identity() });
       return room;
     } catch (error) {
       this.matching = false;
@@ -150,6 +150,10 @@ export class MultiplayerClient extends EventTarget {
 
   startRace() {
     this.send('start');
+  }
+
+  kickPlayer(playerId) {
+    return this.send('kick', { playerId });
   }
 
   markReady() {
@@ -262,6 +266,13 @@ export class MultiplayerClient extends EventTarget {
       this.room = null;
       this.selfId = null;
       this.reconnectToken = null;
+    }
+    if (message.type === 'kicked') {
+      this.room = null;
+      this.selfId = null;
+      this.reconnectToken = null;
+      this.intentionalClose = true;
+      this.socket?.close(4003, 'kicked');
     }
     if (message.type === 'prepare' || message.type === 'race-start') this.matching = false;
     if (message.type === 'race-start') {

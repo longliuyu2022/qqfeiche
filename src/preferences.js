@@ -1,3 +1,5 @@
+import { normalizeDifficulty, normalizeTrackVariant } from './race-rules.js';
+
 export const PREFERENCES_KEY = 'neon-apex:preferences:v1';
 
 export const DEFAULT_PREFERENCES = Object.freeze({
@@ -8,6 +10,10 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   voiceEnabled: true,
   voicePack: 'female',
   ghostEnabled: true,
+  difficulty: 'easy',
+  trackVariant: 'normal',
+  touchLayout: 'standard',
+  touchOpacity: 0.82,
   quality: 'auto',
   vibration: true,
   cameraShake: true,
@@ -19,9 +25,10 @@ export const DEFAULT_PREFERENCES = Object.freeze({
 const QUALITY_OPTIONS = new Set(['auto', 'balanced', 'high', 'ultra']);
 // 与 audio.js 的 VOICE_PACKS 键一一对应。
 const VOICE_PACK_OPTIONS = new Set(['female', 'classic']);
-const MODE_OPTIONS = new Set(['race', 'items', 'timeTrial', 'drift']);
-const TRACK_OPTIONS = new Set(['night', 'day', 'alpine', 'canyon', 'coast']);
+const MODE_OPTIONS = new Set(['race', 'kart', 'items', 'timeTrial', 'drift', 'training']);
+const TRACK_OPTIONS = new Set(['night', 'day', 'alpine', 'canyon', 'coast', 'candy', 'candyland']);
 const CAR_OPTIONS = new Set(['volt', 'raiden', 'nimbus', 'goliath']);
+const TOUCH_LAYOUT_OPTIONS = new Set(['standard', 'left-handed', 'compact']);
 
 function defaultStorage() {
   try {
@@ -45,6 +52,10 @@ export function normalizePreferences(value = {}) {
     voiceEnabled: typeof value?.voiceEnabled === 'boolean' ? value.voiceEnabled : DEFAULT_PREFERENCES.voiceEnabled,
     voicePack: VOICE_PACK_OPTIONS.has(value?.voicePack) ? value.voicePack : DEFAULT_PREFERENCES.voicePack,
     ghostEnabled: typeof value?.ghostEnabled === 'boolean' ? value.ghostEnabled : DEFAULT_PREFERENCES.ghostEnabled,
+    difficulty: normalizeDifficulty(value?.difficulty),
+    trackVariant: normalizeTrackVariant(value?.trackVariant),
+    touchLayout: TOUCH_LAYOUT_OPTIONS.has(value?.touchLayout) ? value.touchLayout : DEFAULT_PREFERENCES.touchLayout,
+    touchOpacity: normalizeVolume(value?.touchOpacity, DEFAULT_PREFERENCES.touchOpacity),
     quality: QUALITY_OPTIONS.has(value?.quality) ? value.quality : DEFAULT_PREFERENCES.quality,
     vibration: typeof value?.vibration === 'boolean' ? value.vibration : DEFAULT_PREFERENCES.vibration,
     cameraShake: typeof value?.cameraShake === 'boolean' ? value.cameraShake : DEFAULT_PREFERENCES.cameraShake,

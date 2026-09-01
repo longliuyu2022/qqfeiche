@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { ROAD_WIDTH, TRACK_CURVE } from '../src/night-track.js';
 import { DAY_TRACK_CURVE } from '../src/day-world.js';
+import { CANDY_KINGDOM_TRACK_CURVE } from '../src/candy-kingdom-world.js';
 import {
   ALPINE_TRACK_CURVE,
   CANYON_TRACK_CURVE,
@@ -21,6 +22,7 @@ const curves = {
   alpine: ALPINE_TRACK_CURVE,
   canyon: CANYON_TRACK_CURVE,
   coast: COAST_TRACK_CURVE,
+  candyland: CANDY_KINGDOM_TRACK_CURVE,
 };
 
 function turnRadiusAt(curve, progress, sampleCount = 1600, sampleSpan = 3) {

@@ -179,6 +179,14 @@ export function createRankedStore({
     get,
     apply,
     snapshot: serialize,
+    leaderboard(limit = 50) {
+      const safeLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 50)));
+      return [...players.values()]
+        .map((state) => ({ state: { ...state }, ordinal: rankOrdinal(state) }))
+        .sort((a, b) => b.ordinal - a.ordinal || b.state.points - a.state.points || b.state.wins - a.state.wins || b.state.races - a.state.races)
+        .slice(0, safeLimit)
+        .map((entry, index) => ({ position: index + 1, ...describeRank(entry.state) }));
+    },
     flush,
     close,
     get size() {

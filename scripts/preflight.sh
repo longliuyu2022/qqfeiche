@@ -82,7 +82,7 @@ trap on_error ERR
 
 cd "${PROJECT_DIR}"
 
-echo "Neon Apex 部署前预检"
+echo "幻境飞车部署前预检"
 echo "项目目录：${PROJECT_DIR}"
 if (( SKIP_TESTS )); then
   echo "模式：仅静态检查（--skip-tests）"

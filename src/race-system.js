@@ -5,6 +5,7 @@ const DEFAULTS = Object.freeze({
   totalLaps: 3,
   trackWidth: 16,
   maxDelta: 0.1,
+  kartCollisions: false,
   overtakeDistance: 28,
   defendDistance: 24,
   laneChangeDistance: 2.8,
@@ -261,7 +262,11 @@ export class RaceSystem {
    * Both keys are optional; omitting them leaves the current setup untouched.
    */
   configure(options = {}) {
-    const { totalLaps = this.totalLaps, rivalCount = this.activeRivalCount } = options;
+    const {
+      totalLaps = this.totalLaps,
+      rivalCount = this.activeRivalCount,
+      kartCollisions = this.config.kartCollisions,
+    } = options;
     this.totalLaps = Math.max(1, Math.floor(totalLaps));
     this.activeRivalCount = THREE.MathUtils.clamp(
       Math.floor(rivalCount),
@@ -269,6 +274,7 @@ export class RaceSystem {
       this.rivals.length,
     );
     this.state.entrantCount = this.activeRivalCount + 1;
+    this.config.kartCollisions = Boolean(kartCollisions);
     if ('speedCompensation' in options) {
       this._speedCompensationOverride = Number.isFinite(options.speedCompensation)
         ? options.speedCompensation
@@ -341,6 +347,8 @@ export class RaceSystem {
     rival.shortcutBase = 0;
     rival.shortcutSegment = 0;
     rival.shortcutEntryLane = 0;
+    rival.collisionSlowTime = 0;
+    rival.collisionImpact = 0;
   }
 
   reset() {
@@ -438,6 +446,8 @@ export class RaceSystem {
     rival.padBoostTime = Math.max(0, rival.padBoostTime - delta);
     rival.landingBoostTime = Math.max(0, rival.landingBoostTime - delta);
     rival.padCooldownTime = Math.max(0, rival.padCooldownTime - delta);
+    rival.collisionSlowTime = Math.max(0, (rival.collisionSlowTime ?? 0) - delta);
+    rival.collisionImpact = Math.max(0, (rival.collisionImpact ?? 0) - delta * 2.4);
     if (rival.padCooldownTime <= 0) rival.padCooldownId = null;
     const playerProgress = this._playerRaceProgress();
     const currentProgress = wrap01(this.startProgress + rival.raceProgress);
@@ -490,6 +500,9 @@ export class RaceSystem {
       : this.config.laneResponse;
     rival.lane = damp(rival.lane, rival.targetLane, laneResponse, delta);
     let targetSpeed = rival.baseSpeed * rival.skill * (1 - cornerLoad * 0.18) + rubberBand;
+    if (rival.collisionSlowTime > 0) {
+      targetSpeed *= rival.collisionSlowTime > 0.35 ? 0.58 : 0.78;
+    }
     if (rival.maneuver === 'overtake') targetSpeed += 2.2 + rival.aggression * 1.8;
     if (rival.maneuver === 'defend') targetSpeed += 0.7;
     let speedCeiling = rival.baseSpeed * 1.13 + 4;
@@ -507,7 +520,7 @@ export class RaceSystem {
     rival.speed += speedDelta;
     this._advanceProgress(rival, delta);
     this._triggerPadBoost(rival);
-    this._separateFromPlayer(rival, delta);
+    if (!this.config.kartCollisions) this._separateFromPlayer(rival, delta);
     this._updateRivalHeight(rival, delta);
 
     if (!rival.finished && rival.raceProgress >= this.totalLaps) {
@@ -849,6 +862,7 @@ export class RaceSystem {
   }
 
   _separateFromPlayer(rival, delta) {
+    if (this.config.kartCollisions) return;
     if (!this.player.state.started || this.player.state.finished) return;
     const playerProgress = this._playerRaceProgress();
     const longitudinalGap = Math.abs(rival.raceProgress - playerProgress) * this.trackLength;

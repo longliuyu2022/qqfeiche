@@ -11,7 +11,9 @@ const browser = await chromium.launch({
 });
 
 await fs.mkdir('artifacts/maps', { recursive: true });
-const maps = ['alpine', 'canyon', 'coast'].filter((id) => !process.env.MAP || process.env.MAP === id);
+const maps = ['alpine', 'canyon', 'coast', 'candy', 'candyland']
+  .filter((id) => !process.env.MAP || process.env.MAP === id);
+const candyTracks = new Set(['candy', 'candyland']);
 const cases = [
   { name: 'desktop', viewport: { width: 1280, height: 720 }, mobile: false },
   { name: 'landscape', viewport: { width: 640, height: 360 }, mobile: true },
@@ -61,7 +63,7 @@ for (const testCase of cases) {
 
   const home = await page.evaluate(async () => {
     const ids = [...document.querySelectorAll('#trackSelector [data-track]')].map((button) => button.dataset.track);
-    const covers = await Promise.all(ids.map(async (id) => {
+    const covers = await Promise.all(ids.filter((id) => !['candy', 'candyland'].includes(id)).map(async (id) => {
       const response = await fetch(`/assets/tracks/${id}-cover.webp`, { cache: 'no-store' });
       return { id, status: response.status, contentType: response.headers.get('content-type') };
     }));
@@ -74,22 +76,37 @@ for (const testCase of cases) {
       pageOverflow: document.documentElement.scrollWidth > innerWidth,
     };
   });
-  assert.deepEqual(home.ids, ['night', 'day', 'alpine', 'canyon', 'coast']);
+  assert.deepEqual(home.ids, ['night', 'day', 'alpine', 'canyon', 'coast', 'candy', 'candyland']);
   assert.ok(home.covers.every((cover) => cover.status === 200), `${testCase.name}: a map cover did not load: ${JSON.stringify(home.covers)}`);
   assert.ok(home.covers.every((cover) => cover.contentType === 'image/webp'), `${testCase.name}: a map cover has the wrong content type: ${JSON.stringify(home.covers)}`);
   assert.equal(home.pageOverflow, false, `${testCase.name}: home page overflows horizontally`);
-  if (testCase.mobile) assert.ok(home.selectorScrollWidth > home.selectorWidth, 'mobile selector should scroll across five maps');
+  if (testCase.mobile) assert.ok(home.selectorScrollWidth > home.selectorWidth, 'mobile selector should scroll across seven maps');
 
   for (const id of maps) {
     console.log(`[maps-browser] loading ${testCase.name}/${id}`);
-    await page.locator(`[data-track="${id}"]`).click();
+    if (candyTracks.has(id)) {
+      await page.locator('[data-race-mode="kart"]').click();
+      if (id !== 'candy') await page.locator(`[data-track="${id}"]`).click();
+      await page.waitForFunction(() => (
+        document.querySelector('[data-race-mode].active')?.dataset.raceMode === 'kart'
+      ), null);
+      await page.screenshot({
+        path: `artifacts/maps/home-${testCase.name}-${id}.png`,
+        animations: 'disabled',
+        timeout: 30000,
+      });
+    } else {
+      await page.locator(`[data-track="${id}"]`).click();
+    }
     await page.waitForFunction((trackId) => document.querySelector('[data-track].active')?.dataset.track === trackId, id);
     const selection = await page.evaluate(() => ({
       id: document.querySelector('[data-track].active')?.dataset.track,
+      mode: document.querySelector('[data-race-mode].active')?.dataset.raceMode,
       overflow: document.documentElement.scrollWidth > innerWidth,
       eventTitle: document.querySelector('#homeEventTitle').textContent,
     }));
     assert.equal(selection.id, id);
+    if (candyTracks.has(id)) assert.equal(selection.mode, 'kart');
     assert.equal(selection.overflow, false, `${testCase.name}/${id}: selector overflowed page`);
     await page.locator('#startRace').click();
     try {
@@ -101,17 +118,22 @@ for (const testCase of cases) {
     }
     const runtime = await page.evaluate(() => ({
       track: window.__NEON_APEX__.activeTrack,
+      mode: window.__NEON_APEX__.activeMode,
       world: window.__NEON_APEX__.world?.world?.name,
       road: window.__NEON_APEX__.world?.road?.name,
       curveLength: window.__NEON_APEX__.trackCurve?.getLength?.(),
       objectCount: window.__NEON_APEX__.world?.world?.children?.length,
     }));
     assert.equal(runtime.track, id);
+    if (candyTracks.has(id)) assert.equal(runtime.mode, 'kart');
     assert.ok(runtime.world && runtime.road, `${testCase.name}/${id}: world metadata missing`);
     assert.ok(runtime.curveLength > 1200, `${testCase.name}/${id}: route is too short`);
+    if (id === 'candyland') assert.ok(runtime.curveLength > 4500, `${testCase.name}/${id}: long route regressed`);
     assert.ok(runtime.objectCount > 10, `${testCase.name}/${id}: scene has too few objects`);
     await page.waitForTimeout(2500);
-    const dataUrl = await page.evaluate((trackId) => window.__NEON_APEX__.qaCaptureProgress({ alpine: 0.12, canyon: 0.42, coast: 0.68 }[trackId]), id);
+    const dataUrl = await page.evaluate((trackId) => window.__NEON_APEX__.qaCaptureProgress({
+      alpine: 0.12, canyon: 0.42, coast: 0.68, candy: 0.24, candyland: 0.515,
+    }[trackId]), id);
     const image = Buffer.from(dataUrl.split(',')[1], 'base64');
     const path = `artifacts/maps/${testCase.name}-${id}.png`;
     await fs.writeFile(path, image);

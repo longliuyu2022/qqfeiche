@@ -18,10 +18,10 @@
       android:pathData="M28,29 L61,29 L57,33 L28,33 Z" />
   <path
       android:fillColor="#EAFDFF"
-      android:pathData="M29,69 L29,39 L35,39 L47,56 L47,39 L53,39 L53,69 L47,69 L35,52 L35,69 Z" />
+      android:pathData="M31,39 L41,39 L36,50 L45,50 L40,59 L48,59 L48,68 L29,68 L36,57 L29,57 L34,48 L29,48 Z" />
   <path
       android:fillColor="#EAFDFF"
-      android:pathData="M53,69 L63,39 L71,39 L81,69 L74,69 L72,62 L62,62 L60,69 Z M64,56 L70,56 L67,47 Z" />
+      android:pathData="M52,39 L81,39 L81,48 L69,48 L69,66 C69,75 64,79 53,79 L53,70 L57,70 C60,70 61,69 61,65 L61,48 L52,48 Z" />
   <path
       android:fillColor="#FF4F61"
       android:pathData="M28,76 L67,76 L62,81 L33,81 Z" />

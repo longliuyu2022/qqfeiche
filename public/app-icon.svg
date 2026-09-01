@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="幻境飞车">
+  <rect width="512" height="512" rx="88" fill="#05080b"/>
+  <path d="M0 350 350 0h162v116L116 512H0Z" fill="#0a151c"/>
+  <path d="m276 512 236-236v236Z" fill="#14080d"/>
+  <path d="M100 112h268l44 44v200l-44 44H144l-44-44Z" fill="#071017" stroke="#35e7ff" stroke-width="14"/>
+  <path d="M116 136h178l-28 24H116Z" fill="#35e7ff"/>
+  <text x="256" y="326" fill="#eafdff" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" font-size="190" font-weight="900" text-anchor="middle">幻</text>
+  <path d="M116 362h190l-30 28H142Z" fill="#ff4f61"/>
+  <path d="M326 362h70l-28 28h-70Z" fill="#d9ff43"/>
+</svg>

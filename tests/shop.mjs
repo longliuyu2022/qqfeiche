@@ -255,12 +255,15 @@ const podium = earnCoins(wallet, {
 // 120 finish + 300 first place + floor(4200/120)=35 skill + 80 clean, x1.0 race.
 assert.deepEqual(podium.breakdown, {
   mode: 'race',
+  difficulty: 'easy',
   base: 120,
   placement: 300,
   skill: 35,
   clean: 80,
   record: 0,
   subtotal: 535,
+  modeMultiplier: 1,
+  difficultyMultiplier: 1,
   multiplier: 1,
   total: 535,
   capped: false,
@@ -294,6 +297,8 @@ assert.equal(totalOf({ mode: 'race', cleanRace: 'yes', isNewRecord: 1 }), 120);
 // Mode coefficients apply to the whole subtotal, rounded last.
 const soloRun = { position: 1, entrants: 1, skillScore: 2400, cleanRace: true, isNewRecord: true };
 assert.equal(totalOf({ ...soloRun, mode: 'race' }), 370);
+assert.equal(totalOf({ ...soloRun, mode: 'race', difficulty: 'hard' }), 463);
+assert.equal(totalOf({ ...soloRun, mode: 'kart' }), 389);
 assert.equal(totalOf({ ...soloRun, mode: 'items' }), 370);
 assert.equal(totalOf({ ...soloRun, mode: 'timeTrial' }), 296);
 assert.equal(totalOf({ ...soloRun, mode: 'drift' }), 333);
@@ -303,6 +308,7 @@ assert.equal(totalOf({ mode: 'drift', position: 1, entrants: 6, cleanRace: true,
 assert.equal(earnCoins(createDefaultWallet(), { ...soloRun, mode: 'battle' }).breakdown.mode, 'race');
 assert.equal(earnCoins(createDefaultWallet(), { ...soloRun, mode: 'constructor' }).breakdown.multiplier, 1);
 assert.equal(earnCoins(createDefaultWallet(), soloRun).breakdown.mode, 'race');
+assert.equal(earnCoins(createDefaultWallet(), { ...soloRun, difficulty: 'hard' }).breakdown.difficultyMultiplier, 1.25);
 
 // Placement rewards: pinned endpoints, monotonically decreasing for any grid size.
 const placementFor = (position, entrants) =>

@@ -20,7 +20,7 @@ const baseMessage = {
 };
 
 assert.equal(ONLINE_RACE_LAPS, 3);
-assert.deepEqual(Object.keys(TRACK_LENGTH_METERS), ['night', 'day', 'alpine', 'canyon', 'coast']);
+assert.deepEqual(Object.keys(TRACK_LENGTH_METERS), ['night', 'day', 'alpine', 'canyon', 'coast', 'candy', 'candyland']);
 assert.equal(
   validateRaceState({ message: baseMessage, map: 'night', startAt, now: startAt - 1 }).reason,
   'race_not_started',

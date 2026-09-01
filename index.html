@@ -4,13 +4,53 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#06090d" />
-    <meta name="description" content="Neon Apex - Three.js arcade racing experience" />
-    <title>Neon Apex // 夜港极速</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23050a0e'/%3E%3Cpath d='M13 47V17h8l14 18V17h8v30h-8L21 29v18z' fill='%2335e7ff'/%3E%3C/svg%3E" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="application-name" content="幻境飞车" />
+    <meta name="apple-mobile-web-app-title" content="幻境飞车" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <meta name="description" content="幻境飞车是一款支持多人联机、卡丁车碰撞、漂移集气和道具对战的免费3D赛车游戏，畅玩夜港、雪岭、海岸与糖果王国等特色赛道。" />
+    <meta name="keywords" content="3D赛车游戏,在线赛车游戏,多人联机赛车,卡丁车游戏,漂移游戏,网页赛车游戏,手机赛车游戏,街机竞速,糖果地图,赛车小游戏" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="幻境飞车" />
+    <meta property="og:title" content="幻境飞车｜多人 3D 街机竞速" />
+    <meta property="og:description" content="多人联机、卡丁车碰撞、漂移集气、道具对战，挑战七张风格各异的 3D 赛道。" />
+    <meta property="og:url" content="https://saiche.aiimage.icu/" />
+    <meta property="og:image" content="https://saiche.aiimage.icu/assets/ui/home-bg-night.webp" />
+    <meta property="og:image:alt" content="幻境飞车夜港赛道游戏画面" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="幻境飞车｜多人 3D 街机竞速" />
+    <meta name="twitter:description" content="多人联机、卡丁车碰撞、漂移集气、道具对战，挑战七张风格各异的 3D 赛道。" />
+    <meta name="twitter:image" content="https://saiche.aiimage.icu/assets/ui/home-bg-night.webp" />
+    <link rel="canonical" href="https://saiche.aiimage.icu/" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="icon" href="/app-icon.svg" type="image/svg+xml" />
+    <title>幻境飞车 - 免费多人3D赛车与卡丁车游戏</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "幻境飞车",
+        "url": "https://saiche.aiimage.icu/",
+        "description": "支持多人联机、卡丁车碰撞、漂移集气和道具对战的免费3D街机赛车游戏。",
+        "inLanguage": "zh-CN",
+        "genre": ["竞速", "街机", "多人联机"],
+        "gamePlatform": ["网页浏览器", "Android"],
+        "operatingSystem": "Web, Android",
+        "applicationCategory": "GameApplication",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "CNY"
+        }
+      }
+    </script>
   </head>
   <body class="menu-open pre-game">
     <div id="app">
-      <canvas id="game" aria-label="Neon Apex 3D 赛车游戏"></canvas>
+      <canvas id="game" aria-label="幻境飞车 3D 赛车游戏"></canvas>
 
       <div class="cinematic-bars" aria-hidden="true"></div>
       <div class="vignette" aria-hidden="true"></div>
@@ -18,8 +58,8 @@
 
       <header class="topbar hud-panel">
         <div class="brand-lockup">
-          <span class="brand-mark">NA</span>
-          <div><strong>NEON APEX</strong><small id="hudTrackName">夜港极速</small></div>
+          <span class="brand-mark">幻</span>
+          <div><strong>幻境飞车</strong><small id="hudTrackName">夜港极速</small></div>
         </div>
         <div class="race-meta">
           <div class="meta-block"><span>POSITION</span><b id="position">1<small>/ 6</small></b></div>
@@ -35,6 +75,7 @@
         <span class="feed-kicker">LIVE EVENT</span>
         <strong id="raceFeedTitle">夜港天际线</strong>
         <small id="raceFeedMeta">HARBOR CITY // 23:48</small>
+        <em id="difficultyBadge" class="difficulty-badge" data-difficulty="easy">简单模式</em>
       </aside>
 
       <aside class="performance-strip" aria-label="比赛表现">
@@ -48,9 +89,19 @@
         <div id="callout" class="callout"></div>
       </section>
 
+      <aside id="trainingGuide" class="training-guide" hidden aria-live="polite">
+        <span>DRIVER SCHOOL</span>
+        <b id="trainingStepTitle">起步加速</b>
+        <small id="trainingStepDetail">完成一次稳定起步</small>
+      </aside>
+
       <aside class="minimap-wrap hud-panel" aria-label="赛道地图">
         <canvas id="minimap" width="184" height="184"></canvas>
         <div class="map-label"><span>SECTOR</span><b id="sector">01</b></div>
+        <div id="turnGuide" class="route-guide" aria-live="polite">
+          <span id="turnArrow" aria-hidden="true">↑</span>
+          <div><b id="turnLabel">保持路线</b><small id="turnDistance">前方无急弯</small></div>
+        </div>
       </aside>
 
       <section class="telemetry" aria-label="车辆状态">
@@ -97,10 +148,10 @@
         <div class="home-content">
           <header class="home-head">
             <div class="home-lockup">
-              <span class="home-mark" aria-hidden="true">NA</span>
+              <span class="home-mark" aria-hidden="true">幻</span>
               <div class="home-titles">
                 <span id="homeKicker" class="home-kicker">NIGHT CIRCUIT 01</span>
-                <h1>NEON APEX</h1>
+                <h1>幻境飞车</h1>
                 <p id="homeTrackSubtitle">夜港极速</p>
               </div>
             </div>
@@ -129,13 +180,17 @@
               <button data-track="alpine" type="button" role="tab" aria-selected="false"><span class="track-swatch alpine" aria-hidden="true"></span><strong>雪岭极光</strong><small>极地雪峰</small></button>
               <button data-track="canyon" type="button" role="tab" aria-selected="false"><span class="track-swatch canyon" aria-hidden="true"></span><strong>赤砂峡谷</strong><small>落日岩谷</small></button>
               <button data-track="coast" type="button" role="tab" aria-selected="false"><span class="track-swatch coast" aria-hidden="true"></span><strong>蔚蓝海岸</strong><small>临海悬崖</small></button>
+              <button data-track="candy" type="button" role="tab" aria-selected="false"><span class="track-swatch candy" aria-hidden="true"></span><strong>糖果湾</strong><small>甜甜动画赛道</small></button>
+              <button data-track="candyland" type="button" role="tab" aria-selected="false"><span class="track-swatch candyland" aria-hidden="true"></span><strong>糖果王国</strong><small>4.9km 甜点巡游</small></button>
             </div>
             <div class="panel-head"><b>模式</b><span>RACE MODE</span></div>
             <div id="modeSelector" class="mode-selector" role="tablist" aria-label="赛事模式">
               <button class="active" data-race-mode="race" type="button" role="tab" aria-selected="true"><strong>竞速</strong><small>3 圈</small></button>
+              <button data-race-mode="kart" type="button" role="tab" aria-selected="false"><strong>卡丁车</strong><small>可碰撞</small></button>
               <button data-race-mode="items" type="button" role="tab" aria-selected="false"><strong>道具</strong><small>对战</small></button>
               <button data-race-mode="timeTrial" type="button" role="tab" aria-selected="false"><strong>计时</strong><small>单圈</small></button>
               <button data-race-mode="drift" type="button" role="tab" aria-selected="false"><strong>漂移</strong><small>单圈</small></button>
+              <button data-race-mode="training" type="button" role="tab" aria-selected="false"><strong>训练</strong><small>新手</small></button>
             </div>
           </section>
 
@@ -144,6 +199,7 @@
               <span id="homeEventMeta">HARBOR CITY // 23:48</span>
               <strong id="homeEventTitle">天际线大奖赛</strong>
               <small id="homeEventRules">3 LAPS // 6 RACERS</small>
+              <em id="homeDifficulty" class="home-difficulty" data-difficulty="easy">标准奖励</em>
             </div>
             <dl class="home-records" aria-label="本地生涯记录">
               <div><dt id="homeBestLabel">PERSONAL BEST</dt><dd id="homeBest">--:--.---</dd></div>
@@ -164,11 +220,33 @@
               <button id="openMultiplayer" class="home-online" type="button">联机</button>
               <button id="openShop" class="home-shop" type="button">商店</button>
               <button id="openAchievements" class="home-achievements" type="button">成就</button>
+              <button id="openChallenges" class="home-challenges" type="button">挑战</button>
+              <button id="openLeaderboard" class="home-leaderboard" type="button">赛季榜</button>
               <button id="openSettings" class="home-settings" type="button">设置</button>
             </div>
           </div>
         </div>
       </section>
+
+      <div id="challengesMenu" class="modal challenges-modal" hidden>
+        <div class="modal-content">
+          <span class="modal-kicker">LIVE CHALLENGES</span>
+          <h1>每日与每周挑战</h1>
+          <div id="challengeList" class="challenge-list" aria-label="挑战列表"></div>
+          <p id="challengeStatus" class="challenge-status" aria-live="polite">完成挑战自动获得金币</p>
+          <button id="closeChallenges" class="modal-close" type="button" aria-label="关闭" title="关闭">&#x00D7;</button>
+        </div>
+      </div>
+
+      <div id="leaderboardMenu" class="modal leaderboard-modal" hidden>
+        <div class="modal-content">
+          <span class="modal-kicker">SEASON RANKING</span>
+          <h1 id="leaderboardTitle">赛季榜</h1>
+          <ol id="leaderboardList" class="leaderboard-list" aria-label="赛季排行榜"></ol>
+          <p id="leaderboardStatus" class="challenge-status" aria-live="polite">正在读取赛季榜…</p>
+          <button id="closeLeaderboard" class="modal-close" type="button" aria-label="关闭" title="关闭">&#x00D7;</button>
+        </div>
+      </div>
 
       <div id="accountMenu" class="modal account-modal" hidden>
         <div class="modal-content">
@@ -202,6 +280,7 @@
           <h1>联机比赛</h1>
           <div id="onlineConnect" class="online-connect">
             <label for="onlineName"><span>游客昵称</span><input id="onlineName" type="text" maxlength="12" autocomplete="nickname" placeholder="输入昵称" /></label>
+            <label for="roomPassword"><span>好友房密码（可选）</span><input id="roomPassword" type="password" maxlength="16" autocomplete="off" placeholder="最多 16 位" /></label>
             <button id="quickMatch" class="primary-action" type="button">快速排位</button>
             <p class="online-hint">按段位匹配 2–6 名车手，赛后自动结算段位分</p>
             <div class="online-divider"><span>或与好友同场</span></div>
@@ -210,6 +289,7 @@
             <div class="online-join-row">
               <label for="roomCode"><span>房间码</span><input id="roomCode" type="text" maxlength="6" autocomplete="off" autocapitalize="characters" placeholder="6 位房间码" /></label>
               <button id="joinRoom" class="secondary-action" type="button">加入</button>
+              <button id="spectateRoom" class="secondary-action" type="button">观战</button>
             </div>
           </div>
           <div id="onlineLobby" class="online-lobby" hidden>
@@ -220,6 +300,7 @@
             <button id="leaveRoom" class="secondary-action" type="button">离开房间</button>
           </div>
           <p id="onlineStatus" class="online-status" aria-live="polite">2–6 人好友赛，由房主发车</p>
+          <p id="onlineQuality" class="online-quality" aria-live="polite">网络质量：未连接</p>
           <button id="closeMultiplayer" class="modal-close" type="button" aria-label="关闭" title="关闭">&#x00D7;</button>
         </div>
       </div>
@@ -236,6 +317,10 @@
             <label class="setting-row" for="voiceEnabled"><span><b>赛事播报</b><small>倒计时与技巧语音</small></span><input id="voiceEnabled" type="checkbox" /></label>
             <label class="setting-row" for="voicePack"><span><b>播报音色</b><small>切换后下一句播报生效</small></span><select id="voicePack"><option value="female">女声</option><option value="classic">原声</option></select></label>
             <label class="setting-row" for="ghostEnabled"><span><b>影子挑战</b><small>计时赛显示最佳纪录幽灵车</small></span><input id="ghostEnabled" type="checkbox" /></label>
+            <label class="setting-row" for="difficultySetting"><span><b>驾驶难度</b><small>困难模式独立纪录，奖励提高 25%</small></span><select id="difficultySetting"><option value="easy">简单</option><option value="hard">困难</option></select></label>
+            <label class="setting-row" for="trackVariantSetting"><span><b>赛道变体</b><small>正向、反向和镜像路线分别记录</small></span><select id="trackVariantSetting"><option value="normal">正向</option><option value="reverse">反向</option><option value="mirror">镜像</option></select></label>
+            <label class="setting-row" for="touchLayoutSetting"><span><b>触屏布局</b><small>切换左右手和紧凑布局</small></span><select id="touchLayoutSetting"><option value="standard">标准</option><option value="left-handed">左手油门</option><option value="compact">紧凑</option></select></label>
+            <label class="setting-row volume-setting" for="touchOpacitySetting"><span><b>按钮透明度</b><small id="touchOpacityValue">82%</small></span><input id="touchOpacitySetting" type="range" min="0.4" max="1" step="0.05" /></label>
             <label class="setting-row" for="qualitySetting"><span><b>画面质量</b><small>重启后完整应用</small></span><select id="qualitySetting"><option value="auto">自动</option><option value="balanced">流畅</option><option value="high">高画质</option><option value="ultra">极致 3A</option></select></label>
             <label class="setting-row" for="vibrationEnabled"><span><b>触感反馈</b><small>漂移、氮气与碰撞</small></span><input id="vibrationEnabled" type="checkbox" /></label>
             <label class="setting-row" for="cameraShakeEnabled"><span><b>镜头震动</b><small>高速与碰撞反馈</small></span><input id="cameraShakeEnabled" type="checkbox" /></label>
@@ -280,8 +365,8 @@
       </div>
 
       <div id="loading" class="loading-screen done" style="display: none">
-        <div class="loading-brand"><span>NA</span></div>
-        <p>NEON APEX</p>
+        <div class="loading-brand"><span>幻</span></div>
+        <p>幻境飞车</p>
         <div class="loading-track"><i></i></div>
         <small>正在部署天际赛道</small>
       </div>

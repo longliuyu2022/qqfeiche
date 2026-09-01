@@ -1,0 +1,20 @@
+{
+  "name": "幻境飞车 - 多人 3D 街机竞速",
+  "short_name": "幻境飞车",
+  "description": "支持多人联机、卡丁车碰撞、漂移集气和道具对战的免费3D赛车游戏。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#05080b",
+  "theme_color": "#06090d",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
