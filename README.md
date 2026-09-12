@@ -10,6 +10,17 @@
 >
 > Android 下载：[APK](https://saiche.aiimage.icu/downloads/neon-apex-release.apk) · [AAB](https://saiche.aiimage.icu/downloads/neon-apex-release.aab)
 
+## 开发中
+
+- 重做雪岭、峡谷与海岸的连续地形、山体轮廓和地标接地：雪岭保留积雪山脊，峡谷采用分层台地与石拱，海岸降低崖壁并展开棕榈叶；路基、植被和环境资产按实际地面高度放置
+- 三张山景地图增加连续护栏、立柱和反光片，近道入口保留开口；七张地图增加路侧弯道箭头，并修正导航左右方向，支持反向与镜像赛道
+- 新客户端使用持久化的钱包操作队列同步收入、购买和装备；断网、刷新、退出登录不会丢弃待上传操作，服务端按设备序号去重，重试和服务重启不会重复入账。多设备购买合并，重复购买同一商品只扣一次；余额不足的冲突会返回提示
+- 钱包文件损坏时拒绝覆盖，账号容量上限不再淘汰已有钱包。联机奖励单独接收，避免与本地收入队列重复计数
+- 联机状态校验关联车辆位置与赛道进度，覆盖七图、正向/反向/镜像、发车格与近道；路线数据由实际游戏曲线生成，逻辑测试检查数据是否过期，修改赛道后运行 `npm run routes:generate`
+- ESLint 接入 CI 和发布预检；新增独立浏览器 CI，覆盖注册登录、钱包跨设备/离线刷新、桌面与手机基础画面、驾驶操作和暂停，截图保存为 Actions 产物
+
+发布这些修改时先更新服务端，再发布网页或 APK。新客户端依赖 `/multiplayer/auth/wallet/sync`；旧快照接口保留兼容旧版本。单机收入仍由客户端计算，位置校验也不等于服务端权威物理模拟。
+
 ## v1.11.0 更新
 
 - 纪录改为按「赛制 + 难度 + 赛道 + 变体」分别保存。此前七张地图共用一条纪录，只要在短赛道跑过一次，长赛道就永远判不出破纪录：糖果王国长度是糖果湾的 2.9 倍，跑出本图最好成绩也拿不到破纪录奖励和语音播报。反向与镜像赛道现在也各记一份。老存档的聚合纪录原样保留（成就与生涯统计仍读它），按图纪录从升级后第一场开始累积
@@ -451,11 +462,20 @@ python3 -m venv /tmp/ttsenv && /tmp/ttsenv/bin/pip install edge-tts
 GitHub Actions 工作流 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在推送到 `main` 和所有 Pull Request 上触发，使用 Node.js 20 依次执行：
 
 1. `npm ci` 按 `package-lock.json` 安装依赖（带 npm 缓存）
-2. `npm test` 跑完 35 套纯 Node 逻辑测试（赛制、卡丁碰撞、联机卡丁、联机金币、歌单、挑战、训练、导航、账号、钱包同步、语音包、纪录、赛道、地形、环境流式加载、幽灵、段位、联机排位、商店、道具、联机、触控、键盘等）
-3. `npm run build` 生产构建
-4. 校验构建产物：`dist/index.html` 以及 `dist/assets` 下的 `.js` 与 `.css` 均存在且非空
+2. `npm run lint` 检查源码、服务端与测试，任何错误或告警都阻断
+3. `npm test` 跑完 35 套纯 Node 逻辑测试，包含钱包持久化操作队列和赛道校验数据一致性
+4. `npm run build` 生产构建
+5. 校验构建产物：`dist/index.html` 以及 `dist/assets` 下的 `.js` 与 `.css` 均存在且非空
 
-CI **不运行**浏览器测试（`test:visual`、`test:maps-browser`、`test:item-browser`、`test:online-browser`、`test:auth-browser`、`test:wallet-browser`、`test:voice-browser`、`test:performance`、`test:sections`）。它们需要本机 Chromium（`/usr/local/bin/chromium-browser`，可用 `CHROMIUM_PATH` 覆盖）外加一个 `vite preview` 服务器，在 CI 的软件渲染环境下单次运行可能长达数十分钟，既会撞上 job 超时，也容易因渲染差异产生假失败。这些测试保留为本地和发布前的人工回归手段。Job 超时设为 20 分钟，同分支的新提交会自动取消仍在运行的旧任务。
+独立 `browser-smoke` Job 安装 Chromium、构建并运行 `npm run test:browser-smoke`。它覆盖账号、钱包、桌面/手机竖横屏的首页与基础赛车画面，校验画布像素非空、车辆移动、页面溢出和暂停。每次运行保存截图与指标到 `artifacts/browser-smoke/`，由 Actions 上传为产物。测试自行启动隔离服务，支持 `CHROMIUM_PATH`，否则使用本机 Chromium 或 Playwright 浏览器。
+
+基础画面测试会在首帧加载后将渲染像素密度降至 0.3，以便软件渲染环境完成真实倒计时和驾驶操作；UI 视口尺寸保持不变，不用该测试衡量帧率。全地图、观战、道具、语音和 GPU 性能专项仍保留为本地/发布前回归；尚未引入固定渲染环境下的像素基线比对。两个 Job 超时均为 20 分钟，同分支的新提交会取消旧任务。
+
+```bash
+npx playwright install chromium  # 本机已有 Chromium 时可省略
+npm run build
+npm run test:browser-smoke
+```
 
 ### 部署前预检
 
@@ -471,7 +491,7 @@ bash scripts/preflight.sh --allow-dirty    # 允许工作区存在未提交改�
 
 1. Node.js 版本 ≥ 20
 2. Git 工作区无未提交改动（`--allow-dirty` 可跳过）
-3. `npm test` 全绿（`--skip-tests` 可跳过）
+3. `npm run lint` 与 `npm test` 全绿（`--skip-tests` 可跳过）
 4. `npm run build` 成功且 `dist` 产物存在非空（`--skip-tests` 可跳过）
 5. `package.json` 的 `version` 与 `android/app/build.gradle` 的 `versionName` 一致
 6. README 顶部记录的「当前版本」与 `package.json` 的 `version` 一致（找不到记录只告警，不阻断）

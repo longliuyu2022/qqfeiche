@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { racePosition } from './race-fixtures.mjs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
@@ -127,11 +128,11 @@ try {
 
   const snapshotPromise = waitForMessage(guest, 'snapshot');
   host.send(JSON.stringify({
-    type: 'state', sequence: 1, x: 12, y: 3, z: -8, yaw: 0.5,
+    type: 'state', sequence: 1, ...racePosition('coast', 0.001), yaw: 0.5,
     speed: 42, progress: 0.001, lap: 9, finished: false,
   }));
   const snapshot = await snapshotPromise;
-  assert.equal(snapshot.players[0].x, 12);
+  assert.equal(snapshot.players[0].x, racePosition('coast', 0.001).x);
   assert.equal(snapshot.players[0].progress, 0.001);
   assert.equal(snapshot.players[0].lap, 1);
 

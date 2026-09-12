@@ -36,8 +36,6 @@ function readGlb(file) {
 }
 
 function writeGlb(file, json, bin) {
-  const jsonText = JSON.stringify(json);
-  const paddedJson = Buffer.from(jsonText.padEnd(Math.ceil(jsonText.length / 4) * 4, ' '));
   const paddedBin = bin.length % 4 === 0
     ? bin
     : Buffer.concat([bin, Buffer.alloc(4 - (bin.length % 4))]);

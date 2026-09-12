@@ -131,10 +131,13 @@ else
 fi
 
 # 3. 逻辑测试
-step "3/7 运行逻辑测试（npm test）"
+step "3/7 运行静态检查与逻辑测试（npm run lint / npm test）"
 if (( SKIP_TESTS )); then
   warn "已按 --skip-tests 跳过 npm test"
 else
+  if ! npm run lint; then
+    fail "ESLint 检查未通过。请修复后重试。"
+  fi
   if ! npm test; then
     fail "npm test 未全绿。请修复失败用例后重试。"
   fi

@@ -1,0 +1,14 @@
+{
+  "builtAt": "2026-09-08T04:45:20.992200+00:00",
+  "version": "1.11.0",
+  "artifact": "/root/neon-apex/artifacts/apk/neon-apex-scenic-preview-20260908.apk",
+  "bytes": 75239659,
+  "sha256": "6f0900a74bad3bc696914c3c57478ca5a58860e274ee6b2cf06af6415548e180",
+  "verifiedWebEntries": 8,
+  "scenicMaps": [
+    "alpine",
+    "canyon",
+    "coast"
+  ],
+  "deviceValidation": "User will test visuals, frame rate and handling on their device"
+}

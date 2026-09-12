@@ -1,11 +1,12 @@
 // 账号钱包同步：服务端存储的合并/防清零语义，以及客户端的登录接管、
 // 游客与账号存储键隔离、离线降级。
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WALLET_KEY, loadWallet, saveWallet } from '../src/shop.js';
-import { accountWalletKey, createWalletSync } from '../src/wallet-sync.js';
+import { WALLET_KEY, loadWallet, saveWallet, purchase, equip } from '../src/shop.js';
+import { accountWalletKey, createWalletSync, walletOutboxKey } from '../src/wallet-sync.js';
+import { walletOperation } from '../src/wallet-operations.js';
 import { createWalletStore, mergeWallets } from '../server/wallet-store.mjs';
 
 class MemoryStorage {
@@ -106,25 +107,38 @@ assert.equal(mergeWallets(frozenBase, { coins: 20, totalEarned: 5 }).coins, 20);
 
 // --- 客户端同步 -------------------------------------------------------------
 
-function createHarness({ remoteWallet, failing = false } = {}) {
-  const storage = new MemoryStorage();
+const harnessDirectory = mkdtempSync(join(tmpdir(), 'neon-apex-wallet-journal-'));
+const harnesses = [];
+function createHarness({ remoteWallet, failing = false, storage = new MemoryStorage(), store } = {}) {
+  store ??= createWalletStore({ filePath: join(harnessDirectory, `${harnesses.length}.json`), flushIntervalMs: 0 });
+  if (remoteWallet) store.put(accountId, remoteWallet);
   const calls = [];
-  let remote = { ...remoteWallet };
-  const reject = async () => { throw new Error('offline'); };
+  let lostResponse = false;
+  const checkNetwork = () => { if (failing) throw new Error('offline'); };
   const sync = createWalletSync({
     storage,
     // 定时器交给测试掌控：只入队，由 flush() 显式触发。
     setTimer: () => 0,
     clearTimer: () => {},
-    fetchWallet: failing ? reject : async () => { calls.push('fetch'); return { wallet: remote }; },
-    pushWallet: failing ? reject : async (wallet) => { calls.push('push'); remote = wallet; return { wallet }; },
-    mergeWallet: failing ? reject : async (wallet) => {
+    fetchWallet: async () => { checkNetwork(); calls.push('fetch'); return { wallet: store.get(accountId) }; },
+    syncWallet: async (batch) => {
+      checkNetwork();
+      assert.equal(batch.accountId, accountId);
+      calls.push('sync');
+      const result = store.sync(accountId, batch);
+      if (lostResponse) { lostResponse = false; throw new Error('response lost after commit'); }
+      return result;
+    },
+    mergeWallet: async (wallet) => {
+      checkNetwork();
       calls.push('merge');
-      remote = mergeWallets(remote, wallet);
-      return { wallet: remote };
+      return { wallet: store.merge(accountId, wallet) };
     },
   });
-  return { storage, sync, calls, remoteOf: () => remote };
+  const harness = { storage, sync, store, calls, remoteOf: () => store.get(accountId),
+    setFailing(value) { failing = value; }, loseResponse() { lostResponse = true; } };
+  harnesses.push(harness);
+  return harness;
 }
 
 const account = { id: accountId, username: 'racer' };
@@ -140,7 +154,7 @@ const account = { id: accountId, username: 'racer' };
   sync.subscribe((wallet) => seen.push(wallet));
   const signedIn = await sync.signIn(account);
 
-  assert.deepEqual(calls, ['merge'], '本机首次绑定该账号时走合并');
+  assert.deepEqual(calls, ['merge', 'sync'], '本机首次绑定该账号时走合并');
   assert.equal(signedIn.coins, 900, '金币取两边较大值');
   assert.ok(signedIn.owned.includes('nimbus') && signedIn.owned.includes('raiden'), '道具取并集');
   assert.equal(seen.length, 1, '订阅方应收到一次钱包更新');
@@ -154,7 +168,7 @@ const account = { id: accountId, username: 'racer' };
   assert.equal(loadWallet(storage, accountWalletKey(accountId)).coins, 1200, '本地立即可见');
   assert.equal(loadWallet(storage, WALLET_KEY).coins, 500, '写入不该污染游客钱包');
   assert.equal(await sync.flush(), true);
-  assert.deepEqual(calls, ['merge', 'push']);
+  assert.deepEqual(calls, ['merge', 'sync', 'sync']);
 
   // 退出登录回到游客钱包。
   const guest = await sync.signOut();
@@ -163,7 +177,7 @@ const account = { id: accountId, username: 'racer' };
 
   // 再次登录：已经绑过了，这次直接拉取。
   await sync.signIn(account);
-  assert.deepEqual(calls, ['merge', 'push', 'fetch'], '同一台设备第二次登录不再重复合并');
+  assert.deepEqual(calls, ['merge', 'sync', 'sync', 'sync'], '同一台设备第二次登录不再重复合并');
 }
 
 // 上次上传没成功（本地 totalEarned 更高）：反过来把本地推上去，不采纳过期的云端数据。
@@ -176,8 +190,8 @@ const account = { id: accountId, username: 'racer' };
 
   const adopted = await sync.signIn(account);
   assert.equal(adopted.coins, 800, '本地更新的战果不能被过期云端数据盖掉');
-  assert.equal(await sync.flush(), true);
-  assert.deepEqual(calls, ['fetch', 'push'], '本地更新时应补推一次');
+  assert.equal(await sync.flush(), false);
+  assert.deepEqual(calls, ['fetch', 'merge', 'sync'], '旧版本离线存档应迁移一次');
 }
 
 // 离线：照常用本机缓存开玩，不抛错、不清空。
@@ -205,6 +219,132 @@ const account = { id: accountId, username: 'racer' };
   assert.equal(loadWallet(storage, WALLET_KEY).coins, 42, '游客钱包写在默认键上');
 }
 
-console.log(JSON.stringify({
-  store: 'ok', merge: 'ok', wipeGuard: 'ok', signIn: 'ok', offline: 'ok', guest: 'ok',
-}));
+// A purchase and equipment change must survive a failed upload and a page reload.
+{
+  const first = createHarness({ remoteWallet: { coins: 5000, totalEarned: 5000 } });
+  await first.sync.signIn(account);
+  first.setFailing(true);
+  first.sync.persist(purchase(first.sync.read(), 'paint-cyan').wallet);
+  first.sync.persist(equip(first.sync.read(), 'paint-cyan').wallet);
+  assert.equal(await first.sync.flush(), false);
+  first.sync.destroy();
+  const resumed = createHarness({ storage: first.storage, store: first.store });
+  await resumed.sync.signIn(account);
+  assert.equal(resumed.sync.read().coins, 4200);
+  assert.equal(resumed.sync.read().equipped.paint, 'paint-cyan');
+  assert.equal(resumed.remoteOf().equipped.paint, 'paint-cyan');
+  assert.equal(JSON.parse(first.storage.getItem(walletOutboxKey(accountId))).outbox.length, 0);
+}
+
+// Independent purchases and earnings merge; a duplicate purchase is charged once.
+{
+  const a = createHarness({ remoteWallet: { coins: 5000, totalEarned: 5000 } });
+  const b = createHarness({ store: a.store });
+  await a.sync.signIn(account);
+  await b.sync.signIn(account);
+  a.sync.persist(purchase(a.sync.read(), 'paint-cyan').wallet);
+  b.sync.persist(purchase(b.sync.read(), 'wheel-spoke').wallet);
+  await Promise.all([a.sync.flush(), b.sync.flush()]);
+  assert.equal(a.remoteOf().coins, 3500);
+  assert.ok(a.remoteOf().owned.includes('paint-cyan'));
+  assert.ok(a.remoteOf().owned.includes('wheel-spoke'));
+  a.sync.persist({ ...a.sync.read(), coins: a.sync.read().coins + 100, totalEarned: 5100 });
+  b.sync.persist({ ...b.sync.read(), coins: b.sync.read().coins + 200, totalEarned: 5200 });
+  await Promise.all([a.sync.flush(), b.sync.flush()]);
+  assert.equal(a.remoteOf().coins, 3800);
+  assert.equal(a.remoteOf().totalEarned, 5300);
+  await Promise.all([a.sync.refresh(), b.sync.refresh()]);
+  a.sync.persist(purchase(a.sync.read(), 'paint-lava').wallet);
+  b.sync.persist(purchase(b.sync.read(), 'paint-lava').wallet);
+  await Promise.all([a.sync.flush(), b.sync.flush()]);
+  assert.equal(a.remoteOf().coins, 2800, 'same item purchased on two devices is charged once');
+}
+
+// Committed operations remain idempotent even after a server restart.
+{
+  const a = createHarness({ remoteWallet: { coins: 100, totalEarned: 100 } });
+  await a.sync.signIn(account);
+  a.sync.persist({ ...a.sync.read(), coins: 400, totalEarned: 400 });
+  a.loseResponse();
+  assert.equal(await a.sync.flush(), false);
+  assert.equal(a.remoteOf().coins, 400);
+  a.sync.destroy();
+  a.store.close();
+  const reopened = createWalletStore({ filePath: a.store.filePath, flushIntervalMs: 0 });
+  const b = createHarness({ storage: a.storage, store: reopened });
+  await b.sync.signIn(account);
+  assert.equal(b.sync.read().coins, 400, 'lost response cannot duplicate earnings');
+}
+
+// A stale session response must not initialize one account with another account's wallet.
+{
+  const storage = new MemoryStorage();
+  storage.setItem('neon-apex:wallet-bound:v1', JSON.stringify([accountId]));
+  saveWallet({ coins: 120, totalEarned: 120 }, storage, accountWalletKey(accountId));
+  const sync = createWalletSync({ storage, fetchWallet: async () => ({ accountId: 'another-account', wallet: { coins: 9000 } }),
+    syncWallet: async () => { assert.fail('mismatched account must never reach sync'); }, setTimer: () => 0, clearTimer: () => {} });
+  await sync.signIn(account);
+  assert.equal(sync.read().coins, 120);
+  sync.destroy();
+}
+
+// Offline logout retains the original account's outbox.
+{
+  const a = createHarness({ remoteWallet: { coins: 1000, totalEarned: 1000 } });
+  await a.sync.signIn(account);
+  a.setFailing(true);
+  a.sync.persist(purchase(a.sync.read(), 'paint-cyan').wallet);
+  await a.sync.signOut();
+  assert.equal(a.sync.read().coins, 0);
+  a.setFailing(false);
+  await a.sync.signIn(account);
+  assert.equal(a.sync.read().coins, 200);
+  assert.ok(a.sync.read().owned.includes('paint-cyan'));
+}
+
+// Server rewards and coin-only achievement bonuses are not lost or counted twice.
+{
+  const a = createHarness({ remoteWallet: { coins: 1000, totalEarned: 1000 } });
+  await a.sync.signIn(account);
+  a.store.credit(accountId, 252);
+  a.sync.creditFromServer(252);
+  a.sync.persist({ ...a.sync.read(), coins: a.sync.read().coins + 100 });
+  await a.sync.flush();
+  assert.equal(a.remoteOf().coins, 1352);
+  assert.equal(a.remoteOf().totalEarned, 1252);
+}
+
+// Conflicting spending has a visible result instead of silently replacing purchases.
+{
+  const a = createHarness({ remoteWallet: { coins: 1000, totalEarned: 1000 } });
+  const b = createHarness({ store: a.store });
+  await a.sync.signIn(account);
+  await b.sync.signIn(account);
+  a.sync.persist(purchase(a.sync.read(), 'paint-cyan').wallet);
+  b.sync.persist(purchase(b.sync.read(), 'wheel-spoke').wallet);
+  await a.sync.flush();
+  await b.sync.flush();
+  assert.equal(b.sync.read().coins, 200);
+  assert.match(b.sync.status, /部分购买未完成/);
+  assert.ok(b.sync.read().owned.includes('paint-cyan'));
+  assert.ok(!b.sync.read().owned.includes('wheel-spoke'));
+}
+
+{
+  const limited = createWalletStore({ filePath: join(harnessDirectory, 'limited.json'), maxAccounts: 1, flushIntervalMs: 0 });
+  limited.put(accountId, { coins: 800 });
+  assert.throws(() => limited.put('second-account', { coins: 1 }), /capacity/);
+  assert.equal(limited.get(accountId).coins, 800, 'capacity cannot evict existing wallets');
+  const operation = { ...walletOperation({ coins: 800 }, { coins: 900 }), sequence: 2 };
+  assert.throws(() => limited.sync(accountId, { clientId: 'test-client', operations: [operation] }), /sequence gap/);
+  assert.equal(limited.get(accountId).coins, 800);
+  limited.close();
+  const corrupt = join(harnessDirectory, 'corrupt.json');
+  writeFileSync(corrupt, '{broken');
+  assert.throws(() => createWalletStore({ filePath: corrupt }), /refusing to overwrite/);
+}
+
+for (const harness of harnesses) { harness.sync.destroy(); harness.store.close(); }
+rmSync(harnessDirectory, { recursive: true, force: true });
+console.log(JSON.stringify({ store: 'ok', migration: 'ok', offlineReload: 'ok', concurrentPurchases: 'ok',
+  idempotentRetry: 'ok', serverRestart: 'ok', spendingConflict: 'ok', guest: 'ok' }));

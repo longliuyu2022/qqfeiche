@@ -17,6 +17,8 @@ const server = spawn(process.execPath, ['server/index.mjs'], {
     ...process.env,
     NEON_APEX_PORT: String(port),
     NEON_APEX_AUTH_FILE: authFile,
+    NEON_APEX_WALLET_FILE: path.join(temporaryDirectory, 'wallets.json'),
+    NEON_APEX_RANK_FILE: path.join(temporaryDirectory, 'ranked.json'),
     NEON_APEX_AUTH_ACTION_LIMIT: '50',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -88,6 +90,24 @@ try {
 
   const current = await request('/multiplayer/auth/session', { cookie: sessionCookie });
   assert.equal(current.body.user.username, username);
+
+  const batch = { accountId: current.body.user.id, clientId: 'auth-test-device', operations: [
+    { sequence: 1, coins: 1000, earned: 1000, purchases: ['paint-cyan'], equipped: { paint: 'paint-cyan' } },
+  ] };
+  const synced = await request('/multiplayer/auth/wallet/sync', { method: 'POST', cookie: sessionCookie, body: batch });
+  assert.equal(synced.status, 200);
+  assert.equal(synced.body.wallet.coins, 200);
+  assert.equal(synced.body.acknowledged, 1);
+  const retried = await request('/multiplayer/auth/wallet/sync', { method: 'POST', cookie: sessionCookie, body: batch });
+  assert.equal(retried.body.wallet.coins, 200, 'API retry is idempotent');
+  const switched = await request('/multiplayer/auth/wallet/sync', { method: 'POST', cookie: sessionCookie, body: { ...batch, accountId: 'different-account' } });
+  assert.equal(switched.status, 409, 'a delayed upload cannot target a different signed-in account');
+  const switchedMerge = await request('/multiplayer/auth/wallet/merge', { method: 'POST', cookie: sessionCookie, body: { accountId: 'different-account', wallet: { coins: 9000 } } });
+  assert.equal(switchedMerge.status, 409, 'initial wallet migration is also bound to the intended account');
+  const malformed = await request('/multiplayer/auth/wallet/sync', { method: 'POST', cookie: sessionCookie, body: { ...batch, operations: [{ sequence: 2, coins: -1000 }] } });
+  assert.equal(malformed.status, 400);
+  const unauthenticated = await request('/multiplayer/auth/wallet/sync', { method: 'POST', body: batch });
+  assert.equal(unauthenticated.status, 401);
 
   const duplicate = await request('/multiplayer/auth/register', {
     method: 'POST', body: { username: '车手alpha', password },

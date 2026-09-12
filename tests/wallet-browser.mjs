@@ -7,6 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from '@playwright/test';
+import { chromiumPath } from './browser-support.mjs';
 
 const root = new URL('..', import.meta.url);
 const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'neon-apex-wallet-browser-'));
@@ -31,6 +32,7 @@ const vite = spawn(process.execPath, [
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let browser;
+let expectedOffline = false;
 
 const USERNAME = '同步车手';
 const PASSWORD = 'wallet-sync-42';
@@ -54,7 +56,9 @@ async function waitForHttp(url, timeoutMs = 15000) {
 async function openBrowserWindow(errors) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   const page = await context.newPage();
-  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !(expectedOffline && message.text().includes('503'))) errors.push(message.text());
+  });
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${vitePort}`, { waitUntil: 'networkidle' });
   await page.waitForFunction(() => window.__NEON_APEX_BOOTSTRAP_READY__ === true);
@@ -85,7 +89,7 @@ try {
   ]);
   browser = await chromium.launch({
     headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/local/bin/chromium-browser',
+    executablePath: chromiumPath,
   });
   const errors = [];
 
@@ -113,9 +117,8 @@ try {
 
   // --- 浏览器 B 花钱买东西，A 刷新后应同步看到 ------------------------------
   await b.page.locator('#openShop').click();
-  const affordable = b.page.locator('.shop-card').filter({ hasNotText: '初始赠送' })
-    .locator('button.shop-card-action:not([disabled])').first();
-  await affordable.click();
+  await b.page.locator('[data-shop-tab="paint"]').click();
+  await b.page.locator('[data-item="paint-cyan"] .shop-card-action').click();
   await b.page.waitForFunction(() => document.getElementById('homeCoins').textContent !== '4,200');
   const coinsAfterPurchase = await coinsOf(b.page);
   assert.notEqual(coinsAfterPurchase, '4,200', '购买后金币应减少');
@@ -132,6 +135,36 @@ try {
   );
   assert.equal(await coinsOf(a.page), coinsAfterPurchase, '另一个浏览器的消费应同步回来');
 
+  // Both devices spend from the same cached balance while wallet uploads are unavailable.
+  expectedOffline = true;
+  const offline = (route) => route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"OFFLINE"}' });
+  await a.page.route('**/multiplayer/auth/wallet/sync', offline);
+  await b.page.route('**/multiplayer/auth/wallet/sync', offline);
+  await a.page.locator('#openShop').click();
+  await a.page.locator('[data-shop-tab="wheel"]').click();
+  await a.page.locator('[data-item="wheel-spoke"] .shop-card-action').click();
+  await b.page.locator('#openShop').click();
+  await b.page.locator('[data-shop-tab="decal"]').click();
+  await b.page.locator('[data-item="decal-stripe"] .shop-card-action').click();
+  await Promise.all([a.page, b.page].map((page) => page.evaluate(async () => (await import('/src/wallet-sync.js')).getWalletSync().flush())));
+  await b.page.unroute('**/multiplayer/auth/wallet/sync', offline);
+  await b.page.evaluate(async () => (await import('/src/wallet-sync.js')).getWalletSync().flush());
+  await a.page.reload({ waitUntil: 'networkidle' });
+  await a.page.waitForFunction(() => window.__NEON_APEX_BOOTSTRAP_READY__ === true);
+  await a.page.locator('#openShop').click();
+  await a.page.locator('[data-shop-tab="wheel"]').click();
+  assert.equal(await a.page.locator('[data-item="wheel-spoke"]').getAttribute('data-owned'), 'true', 'offline purchase survives page reload');
+  await a.page.unroute('**/multiplayer/auth/wallet/sync', offline);
+  await a.page.evaluate(async () => (await import('/src/wallet-sync.js')).getWalletSync().flush());
+  await b.page.evaluate(async () => (await import('/src/wallet-sync.js')).getWalletSync().refresh());
+  expectedOffline = false;
+  for (const page of [a.page, b.page]) {
+    assert.equal(await coinsOf(page), '2,100', 'both independent purchases are charged and retained');
+    const wallet = await page.evaluate(async () => (await import('/src/wallet-sync.js')).getWalletSync().read());
+    assert.ok(wallet.owned.includes('wheel-spoke') && wallet.owned.includes('decal-stripe'));
+    await page.locator('#closeShop').click();
+  }
+
   // --- 退出登录应回到本机游客钱包，而不是继承账号余额 -----------------------
   await b.page.locator('#openAccount').click();
   await b.page.locator('#accountLogout').click();
@@ -143,6 +176,8 @@ try {
     guestMerge: 'ok',
     crossBrowserSync: 'ok',
     purchasePropagation: 'ok',
+    offlineReload: 'ok',
+    concurrentPurchases: 'ok',
     logoutIsolation: 'ok',
     coinsAfterPurchase,
     errors,

@@ -35,17 +35,12 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      - name: 静态检查
+        run: npm run lint
+
       # 具体套数以 package.json 的 test 脚本为准，这里不写死数字免得再次过期。
       - name: 逻辑测试（纯 Node）
         run: npm test
-
-      # 说明：这里刻意不运行浏览器测试
-      # （test:visual / test:maps-browser / test:item-browser /
-      #   test:online-browser / test:performance / test:sections）。
-      # 它们需要本机 Chromium（/usr/local/bin/chromium-browser，可用 CHROMIUM_PATH 覆盖）
-      # 外加一个 vite preview 服务器，并且在 GitHub Actions 的软件渲染（SwiftShader）
-      # 环境下单次运行可能长达数十分钟，会稳定撞上 job 超时且极易因渲染差异产生假失败。
-      # 这些测试保留为本地/发布前的人工回归手段，详见 README「持续集成」一节。
 
       - name: 生产构建
         run: npm run build
@@ -75,3 +70,24 @@ jobs:
           echo "  dist/index.html"
           echo "  ${JS_FILE}"
           echo "  ${CSS_FILE}"
+
+  browser-smoke:
+    name: 账号、钱包与基础画面回归
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run test:browser-smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-smoke
+          path: artifacts/browser-smoke/
+          if-no-files-found: ignore

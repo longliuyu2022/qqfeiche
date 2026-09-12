@@ -1,14 +1,8 @@
+import { RACE_ROUTES, gridStartProgress, positionMatchesProgress, routePoint } from './race-routes.mjs';
+
 export const ONLINE_RACE_LAPS = 3;
 
-export const TRACK_LENGTH_METERS = Object.freeze({
-  night: 2071,
-  day: 1726,
-  alpine: 1846,
-  canyon: 2008,
-  coast: 1997,
-  candy: 1671,
-  candyland: 4867,
-});
+export const TRACK_LENGTH_METERS = Object.freeze(Object.fromEntries(Object.entries(RACE_ROUTES).map(([id, route]) => [id, route.length])));
 
 const MAX_VALID_SPEED_MPS = 150;
 const PROGRESS_SLOP = 0.008;
@@ -29,7 +23,7 @@ export function minimumFinishTimeMs(map) {
   return (length * ONLINE_RACE_LAPS / MAX_VALID_SPEED_MPS) * 1000;
 }
 
-export function validateRaceState({ previous = null, message, map, startAt, now = Date.now() }) {
+export function validateRaceState({ previous = null, message, map, trackVariant = 'normal', startProgress = gridStartProgress(), startAt, now = Date.now() }) {
   if (!Number.isFinite(startAt) || now < startAt) {
     return { accepted: false, reason: 'race_not_started' };
   }
@@ -37,6 +31,12 @@ export function validateRaceState({ previous = null, message, map, startAt, now 
   const sequence = Math.floor(finite(message.sequence, 0));
   if (sequence <= (previous?.sequence ?? -1)) {
     return { accepted: false, reason: 'stale_sequence' };
+  }
+  if (previous?.finished) {
+    return { accepted: true, acceptedAt: now, state: { ...previous, sequence, sentAt: now } };
+  }
+  if (!['x', 'y', 'z', 'progress'].every((key) => Number.isFinite(message[key]))) {
+    return { accepted: false, reason: 'invalid_fields' };
   }
 
   const acceptedAt = Math.max(startAt, previous?.acceptedAt ?? startAt);
@@ -71,6 +71,17 @@ export function validateRaceState({ previous = null, message, map, startAt, now 
   if (wantsFinish && now - startAt < minimumFinishTimeMs(map)) {
     return { accepted: false, reason: 'finish_too_fast' };
   }
+  const startBacktrack = previous && progress === 0 && !wantsFinish ? trackLength * MAX_RESPAWN_BACKTRACK : 0;
+  if (!positionMatchesProgress(map, startProgress + progress, { x, y, z }, trackVariant, startBacktrack)) {
+    return { accepted: false, reason: 'position_progress_mismatch' };
+  }
+  const anchor = previous ?? routePoint(map, startProgress, trackVariant);
+  const distanceTravelled = (previous?.distanceTravelled ?? 0) + Math.hypot(x - anchor.x, z - anchor.z);
+  // A generous lower bound tolerates shortcuts and lost packets, but not parking
+  // on the finish line until the minimum timer elapses and claiming whole laps.
+  if (wantsFinish && distanceTravelled < trackLength * ONLINE_RACE_LAPS * 0.25) {
+    return { accepted: false, reason: 'insufficient_movement' };
+  }
 
   const finished = Boolean(previous?.finished || wantsFinish);
   const trustedProgress = finished ? ONLINE_RACE_LAPS : progress;
@@ -89,6 +100,7 @@ export function validateRaceState({ previous = null, message, map, startAt, now 
       yaw: finite(message.yaw),
       speed: clamp(finite(message.speed), -30, 140),
       progress: trustedProgress,
+      distanceTravelled,
       lap,
       finished,
       finishTime: finished ? previous?.finishTime ?? (now - startAt) / 1000 : null,

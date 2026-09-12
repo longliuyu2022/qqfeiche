@@ -9,17 +9,6 @@ const GHOST_MAX_SERIALIZED_LENGTH = 80_000;
 // 仍然封顶，避免异常写入把 localStorage 撑爆。
 const MAX_SCOPED_BUCKETS = 120;
 
-const EMPTY_DIFFICULTY_RECORD = Object.freeze({
-  races: 0,
-  wins: 0,
-  bestTime: null,
-  bestLap: null,
-  timeTrialBest: null,
-  driftBest: 0,
-  itemBest: null,
-  kartBest: null,
-});
-
 const MODES = new Set(['race', 'kart', 'items', 'timeTrial', 'drift']);
 
 function defaultStorage() {

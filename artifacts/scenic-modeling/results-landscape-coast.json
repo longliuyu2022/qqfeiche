@@ -1,0 +1,24 @@
+[
+  {
+    "case": "landscape",
+    "id": "coast",
+    "pixels": {
+      "mean": 125.3340126478922,
+      "variance": 2941.4707306494583,
+      "lit": 0.9935139030688848
+    },
+    "inputSpeed": 123.73164237247381,
+    "distance": 28.06565978403327,
+    "render": {
+      "frame": 65,
+      "calls": 130,
+      "triangles": 282176,
+      "points": 180,
+      "lines": 0
+    },
+    "guideCount": 21,
+    "reliefCount": 3,
+    "assetFailures": [],
+    "overflow": false
+  }
+]

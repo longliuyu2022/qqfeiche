@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { AuthError, createAuthStore } from './auth-store.mjs';
 import { validateRaceState } from './race-validation.mjs';
+import { gridStartProgress } from './race-routes.mjs';
 import {
   createRankedStore, describeRank, normalizePlayerId, rankOrdinal,
 } from './ranked-store.mjs';
@@ -220,7 +221,7 @@ async function handleAuthRequest(request, response, path) {
     authStore.revoke(token);
     return json(response, 200, { user: null }, { ...cors, 'set-cookie': sessionCookie(request, null, 0) });
   }
-  if (path === '/multiplayer/auth/wallet' || path === '/multiplayer/auth/wallet/merge') {
+  if (['/multiplayer/auth/wallet', '/multiplayer/auth/wallet/merge', '/multiplayer/auth/wallet/sync'].includes(path)) {
     return await handleWalletRequest(request, response, path, token, cors);
   }
   if (!['/multiplayer/auth/register', '/multiplayer/auth/login'].includes(path) || request.method !== 'POST') {
@@ -249,18 +250,32 @@ async function handleWalletRequest(request, response, path, token, cors = {}) {
     return json(response, 429, { error: 'RATE_LIMITED', message: '操作过于频繁，请稍后再试' }, { ...cors, 'retry-after': '60' });
   }
   if (path === '/multiplayer/auth/wallet' && request.method === 'GET') {
-    return json(response, 200, { wallet: walletStore.get(user.id) }, cors);
+    return json(response, 200, { wallet: walletStore.get(user.id), accountId: user.id }, cors);
   }
   if (request.method !== 'POST' && request.method !== 'PUT') {
     return json(response, 405, { error: 'METHOD_NOT_ALLOWED', message: '不支持的请求方法' }, cors);
   }
   const body = await readJsonBody(request);
+  if (body.accountId !== undefined && body.accountId !== user.id) {
+    return json(response, 409, { error: 'ACCOUNT_CHANGED', message: '账号已切换，待同步记录保留在原账号' }, cors);
+  }
   // merge 只在本地游客钱包首次绑定账号时调用：金币取大、道具取并集，谁也不会因为登录丢东西。
+  if (path.endsWith('/sync')) {
+    if (body.accountId !== user.id) return json(response, 409, { error: 'ACCOUNT_CHANGED', message: '账号已切换，待同步记录保留在原账号' }, cors);
+    try {
+      const result = walletStore.sync(user.id, body);
+      if (!result) return json(response, 503, { error: 'WALLET_UNAVAILABLE', message: '钱包服务暂不可用' }, cors);
+      return json(response, 200, result, cors);
+    } catch (error) {
+      if (error instanceof TypeError) return json(response, 400, { error: 'INVALID_WALLET_OPERATIONS', message: '钱包同步记录无效' }, cors);
+      throw error;
+    }
+  }
   const wallet = path.endsWith('/merge')
     ? walletStore.merge(user.id, body.wallet)
     : walletStore.put(user.id, body.wallet);
   if (!wallet) return json(response, 503, { error: 'WALLET_UNAVAILABLE', message: '钱包服务暂不可用' }, cors);
-  return json(response, 200, { wallet }, cors);
+  return json(response, 200, { wallet, accountId: user.id }, cors);
 }
 
 function rejectUpgrade(socket, status = 429, message = 'Too Many Requests') {
@@ -289,11 +304,13 @@ function consumeLobbyAction(socket) {
 }
 
 function sanitizeName(value) {
+  // eslint-disable-next-line no-control-regex -- Remove control characters from public names.
   const normalized = String(value || '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, 12);
   return normalized || `车手${Math.floor(Math.random() * 900 + 100)}`;
 }
 
 function sanitizeRoomPassword(value) {
+  // eslint-disable-next-line no-control-regex -- Room codes must not contain control characters.
   return String(value || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 16);
 }
 
@@ -729,13 +746,14 @@ function onReady(socket) {
   context.room.raceDeadline = context.room.startAt + RANKED_RACE_TIMEOUT_MS;
   // Freeze the grid: settlement scores against the roster that took the start,
   // even if somebody rage-quits halfway through.
-  context.room.roster = new Map(connected.map((player) => [player.id, {
+  context.room.roster = new Map(connected.map((player, index) => [player.id, {
     id: player.id,
     name: player.name,
     rankedId: player.rankedId,
     // 奖励要发给「上了发车格的那个账号」，所以账号 id 一起冻结在名单里，
     // 而不是结算时再去问当前握着 socket 的人是谁。
     accountId: player.accountId,
+    startProgress: gridStartProgress(index),
     finishRank: 0,
     finishTime: null,
     invalid: false,
@@ -761,6 +779,8 @@ function onState(socket, message) {
       : null,
     message: { ...message, sequence },
     map: context.room.map,
+    trackVariant: context.room.trackVariant,
+    startProgress: context.room.roster?.get(context.player.id)?.startProgress,
     startAt: context.room.startAt,
   });
   if (!validation.accepted) {

@@ -35,4 +35,20 @@ assert.ok(cue.primary, 'a curved loop should produce an upcoming turn');
 assert.ok(cue.primary.distance > 0 && cue.primary.distance <= 400);
 assert.ok(['left', 'right'].includes(cue.primary.direction));
 
+// Judge directions in the driver's camera frame, independently of atan2 signs.
+for (const variant of ['normal', 'reverse', 'mirror']) {
+  const route = createTrackVariantCurve(curve, variant);
+  const guide = createRouteNavigator(route);
+  for (const progress of [0, 0.18, 0.48, 0.79]) {
+    const turn = guide.getCue(progress).primary;
+    assert.ok(turn);
+    const halfWindow = 27 / route.getLength();
+    const wrap = (value) => THREE.MathUtils.euclideanModulo(value, 1);
+    const before = route.getTangentAt(wrap(turn.progress - halfWindow));
+    const after = route.getTangentAt(wrap(turn.progress + halfWindow));
+    const screenRight = new THREE.Vector3().crossVectors(before, new THREE.Vector3(0, 1, 0)).normalize();
+    assert.equal(turn.direction, after.dot(screenRight) > 0 ? 'right' : 'left', `${variant}: HUD arrow must match the driver's view`);
+  }
+}
+
 console.log(JSON.stringify({ variants: 'ok', turnGuidance: 'ok' }));

@@ -30,8 +30,11 @@ trap rollback EXIT
 install -m 0644 "${PROJECT_DIR}/server/index.mjs" "${STAGE_DIR}/index.mjs"
 install -m 0644 "${PROJECT_DIR}/server/auth-store.mjs" "${STAGE_DIR}/auth-store.mjs"
 install -m 0644 "${PROJECT_DIR}/server/race-validation.mjs" "${STAGE_DIR}/race-validation.mjs"
+install -m 0644 "${PROJECT_DIR}/server/race-routes.mjs" "${STAGE_DIR}/race-routes.mjs"
+install -m 0644 "${PROJECT_DIR}/server/race-routes.json" "${STAGE_DIR}/race-routes.json"
 install -m 0644 "${PROJECT_DIR}/server/ranked-store.mjs" "${STAGE_DIR}/ranked-store.mjs"
 install -m 0644 "${PROJECT_DIR}/server/wallet-store.mjs" "${STAGE_DIR}/wallet-store.mjs"
+sed "s|'./shop.js'|'./shop-catalog.mjs'|" "${PROJECT_DIR}/src/wallet-operations.js" > "${STAGE_DIR}/wallet-operations.mjs"
 # The release directory is flat, so `../src/` is unreachable there. Stage the
 # shared rank rules and shop catalog under the names the server imports
 # (see server/ranked-rules.mjs and server/shop-catalog.mjs).

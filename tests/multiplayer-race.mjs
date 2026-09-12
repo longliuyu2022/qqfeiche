@@ -7,6 +7,7 @@
  * 只用真实服务端与真实协议，不打桩。
  */
 import assert from 'node:assert/strict';
+import { racePosition } from './race-fixtures.mjs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
@@ -34,8 +35,7 @@ const ready = new Promise((resolve, reject) => {
 });
 await ready;
 
-function open() {
-  return new Promise(async (resolve) => {
+async function open() {
     const socket = new WebSocket(`ws://127.0.0.1:${port}/multiplayer`);
     await once(socket, 'open');
     const peer = { socket, inbox: [], closed: null, snapshots: [] };
@@ -45,8 +45,7 @@ function open() {
       if (message.type === 'snapshot') peer.snapshots.push(message);
     });
     socket.on('close', (code, reason) => { peer.closed = { code, reason: reason.toString() }; });
-    resolve(peer);
-  });
+    return peer;
 }
 
 const send = (peer, type, payload = {}) => peer.socket.send(JSON.stringify({ type, ...payload }));
@@ -106,7 +105,7 @@ for (let tick = 0; tick < 1100; tick += 1) {
     const angle = (progress % 1) * Math.PI * 2;
     send(peer, 'state', {
       sequence: sequences[name],
-      x: Math.cos(angle) * 90, y: 0, z: Math.sin(angle) * 90,
+      ...racePosition('night', progress, { index }),
       yaw: angle, speed: pace[name],
       progress, lap: Math.min(ONLINE_RACE_LAPS, Math.floor(progress) + 1),
       finished: done,

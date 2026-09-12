@@ -11,9 +11,12 @@ export class AuthClientError extends Error {
 
 async function authRequest(path, { method = 'GET', body } = {}) {
   let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     response = await fetch(`${apiRoot()}/${path}`, {
       method,
+      signal: controller.signal,
       // Android 版从 appassets.androidplatform.net 打到线上服务端属于跨源，
       // 'same-origin' 会让会话 Cookie 不被携带，登录态永远建立不起来。
       credentials: isCrossOrigin() ? 'include' : 'same-origin',
@@ -22,6 +25,8 @@ async function authRequest(path, { method = 'GET', body } = {}) {
     });
   } catch {
     throw new AuthClientError('无法连接账号服务，请稍后重试', 'NETWORK_ERROR');
+  } finally {
+    clearTimeout(timeout);
   }
   let payload = null;
   try {
@@ -65,6 +70,10 @@ export async function pushAccountWallet(wallet) {
 }
 
 // 本地游客钱包首次绑定账号时用：金币取大、道具取并集。
-export async function mergeAccountWallet(wallet) {
-  return authRequest('wallet/merge', { method: 'POST', body: { wallet } });
+export async function mergeAccountWallet(wallet, accountId) {
+  return authRequest('wallet/merge', { method: 'POST', body: { wallet, accountId } });
+}
+
+export async function syncAccountWallet(batch) {
+  return authRequest('wallet/sync', { method: 'POST', body: batch });
 }

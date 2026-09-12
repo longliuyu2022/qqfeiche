@@ -8,6 +8,7 @@ android/.gradle/
 android/local.properties
 android/app/build/
 artifacts/debug-*.png
+artifacts/browser-smoke/
 *.log
 .DS_Store
 

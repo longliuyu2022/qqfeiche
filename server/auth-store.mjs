@@ -48,6 +48,7 @@ export function validateUsername(value) {
 export function validatePassword(value) {
   if (typeof value !== 'string') throw new AuthError('INVALID_PASSWORD', '请输入密码');
   const length = [...value].length;
+  // eslint-disable-next-line no-control-regex -- Passwords must reject control characters.
   if (length < 8 || length > 72 || Buffer.byteLength(value, 'utf8') > 256 || /[\u0000-\u001f\u007f]/.test(value)) {
     throw new AuthError('INVALID_PASSWORD', '密码需为 8–72 位且不能包含控制字符');
   }

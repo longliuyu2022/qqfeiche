@@ -5,6 +5,7 @@
 //   3. 未完赛的车手拿 0，并带上原因
 //   4. 游客（未登录）拿 0，原因是 guest_no_account
 import assert from 'node:assert/strict';
+import { racePosition } from './race-fixtures.mjs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -127,20 +128,21 @@ function driveRace({ socket, startAt, pace, finish = true }) {
       sendJson(socket, {
         type: 'state',
         sequence,
-        x: Math.sin(sequence / 10) * 3,
-        y: 0.4,
-        z: Math.cos(sequence / 10) * 3,
+        ...racePosition(MAP, progress),
         yaw: 0.1,
         speed: 60,
         progress,
         lap: 1,
         finished: done && finish,
       });
-      if (done) {
-        clearInterval(timer);
-        resolve(sequence);
-      }
+      if (done) stop();
     }, 200);
+    function stop() {
+      clearInterval(timer);
+      socket.off('close', stop);
+      resolve(sequence);
+    }
+    socket.once('close', stop);
   });
 }
 
@@ -283,6 +285,10 @@ try {
     noGuestWalletRows: 'ok',
   }));
 } finally {
-  server.kill('SIGTERM');
+  if (server.exitCode === null) {
+    const exited = once(server, 'exit');
+    server.kill('SIGTERM');
+    await exited;
+  }
   await rm(temporaryDirectory, { recursive: true, force: true });
 }

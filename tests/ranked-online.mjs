@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { racePosition } from './race-fixtures.mjs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtempSync, readFileSync } from 'node:fs';
@@ -76,9 +77,7 @@ function driveRace({
       sendJson(socket, {
         type: 'state',
         sequence,
-        x: Math.sin(sequence / 10) * 3,
-        y: 0.4,
-        z: Math.cos(sequence / 10) * 3,
+        ...racePosition(MAP, progress),
         yaw: 0.1,
         speed: 60,
         progress,

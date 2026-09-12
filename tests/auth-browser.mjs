@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from '@playwright/test';
+import { chromiumPath } from './browser-support.mjs';
 
 const root = new URL('..', import.meta.url);
 const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'neon-apex-auth-browser-'));
@@ -16,6 +17,8 @@ const server = spawn(process.execPath, ['server/index.mjs'], {
     ...process.env,
     NEON_APEX_PORT: String(serverPort),
     NEON_APEX_AUTH_FILE: path.join(temporaryDirectory, 'accounts.json'),
+    NEON_APEX_WALLET_FILE: path.join(temporaryDirectory, 'wallets.json'),
+    NEON_APEX_RANK_FILE: path.join(temporaryDirectory, 'ranked.json'),
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -49,7 +52,7 @@ try {
   ]);
   browser = await chromium.launch({
     headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/local/bin/chromium-browser',
+    executablePath: chromiumPath,
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errors = [];

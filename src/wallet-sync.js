@@ -1,186 +1,229 @@
-// 账号钱包同步：本地 localStorage 仍是每一帧读写的来源（离线也要能玩），
-// 登录后额外把整份钱包同步到服务端，换设备登录就能对上。
-//
-// 存储键是分开的：游客用 WALLET_KEY，登录后用 accountWalletKey(id)。
-// 合在一起的话，登出后游客会直接继承账号的金币。
-import {
-  WALLET_KEY, loadWallet, normalizeWallet, saveWallet,
-} from './shop.js';
-import {
-  fetchAccountWallet, mergeAccountWallet, pushAccountWallet,
-} from './auth-client.js';
+import { WALLET_KEY, loadWallet, normalizeWallet, saveWallet } from './shop.js';
+import { fetchAccountWallet, mergeAccountWallet, syncAccountWallet } from './auth-client.js';
+import { applyWalletOperation, validWalletOperation, walletOperation } from './wallet-operations.js';
 
-// 记录哪些账号已经在本机绑过，用来决定首次登录该合并还是直接拉取。
 export const WALLET_BOUND_KEY = 'neon-apex:wallet-bound:v1';
-
-export function accountWalletKey(accountId) {
-  return `${WALLET_KEY}:${accountId}`;
-}
+export const accountWalletKey = (id) => `${WALLET_KEY}:${id}`;
+export const walletOutboxKey = (id) => `${WALLET_KEY}:outbox:${id}`;
 
 function defaultStorage() {
-  try {
-    return globalThis.localStorage;
-  } catch {
-    return null;
-  }
+  try { return globalThis.localStorage; } catch { return null; }
 }
 
-function readBoundAccounts(storage) {
-  try {
-    const parsed = JSON.parse(storage?.getItem?.(WALLET_BOUND_KEY) || '[]');
-    return new Set(Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : []);
-  } catch {
-    return new Set();
-  }
+function readJson(storage, key, fallback) {
+  try { return JSON.parse(storage?.getItem?.(key) || 'null') ?? fallback; } catch { return fallback; }
+}
+
+function newClientId() {
+  return globalThis.crypto?.randomUUID?.() ?? `wallet-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export function createWalletSync({
   storage,
   fetchWallet = fetchAccountWallet,
-  pushWallet = pushAccountWallet,
   mergeWallet = mergeAccountWallet,
+  syncWallet = syncAccountWallet,
   delayMs = 800,
   setTimer = (fn, ms) => setTimeout(fn, ms),
   clearTimer = (handle) => clearTimeout(handle),
 } = {}) {
   const target = storage === undefined ? defaultStorage() : storage;
   const listeners = new Set();
+  const statusListeners = new Set();
   let accountId = null;
-  let pending = null;
+  let state = null;
   let timer = null;
+  let flight = null;
+  let generation = 0;
+  let retryMs = 2000;
+  let status = '';
 
-  const storageKey = () => (accountId ? accountWalletKey(accountId) : WALLET_KEY);
+  function setStatus(message) {
+    status = message;
+    for (const listener of statusListeners) listener(message);
+  }
 
-  // bootstrap 的首页和 main 的车库各自持有一份 wallet 变量，都要跟着变。
-  function notify(wallet) {
+  function notify() {
+    const wallet = read();
     for (const listener of listeners) listener(wallet);
+    return wallet;
   }
 
-  function subscribe(listener) {
-    if (typeof listener !== 'function') return () => {};
-    listeners.add(listener);
-    return () => listeners.delete(listener);
-  }
-
-  function adopt(wallet) {
-    const next = normalizeWallet(wallet);
-    saveWallet(next, target, storageKey());
-    notify(next);
-    return next;
-  }
-
-  function isBound(id) {
-    return readBoundAccounts(target).has(id);
-  }
-
-  function markBound(id) {
-    const bound = readBoundAccounts(target);
-    bound.add(id);
+  function save() {
+    if (!accountId) return;
     try {
-      target?.setItem?.(WALLET_BOUND_KEY, JSON.stringify([...bound]));
+      // Keep the optimistic wallet and its operations in one atomic storage write.
+      target?.setItem?.(walletOutboxKey(accountId), JSON.stringify(state));
     } catch {
-      // 存不下就当没绑过：下次登录再合并一次，合并是幂等的，不会出问题。
+      setStatus('本机存储不可用，请保持页面打开直到同步完成');
     }
+    saveWallet(state.wallet, target, accountWalletKey(accountId));
   }
 
-  // 上传失败一律不打断游戏：本地已经写好了，等下一次写入或下次登录再补。
-  async function flush() {
-    if (timer !== null) {
-      clearTimer(timer);
-      timer = null;
-    }
-    if (!accountId || !pending) return false;
-    const wallet = pending;
-    pending = null;
-    try {
-      await pushWallet(wallet);
-      return true;
-    } catch {
-      // 期间可能又攒了更新的一份，别把它盖回旧的。
-      pending = pending ?? wallet;
-      return false;
-    }
-  }
-
-  function schedule() {
+  function cancelTimer() {
     if (timer !== null) clearTimer(timer);
-    timer = setTimer(() => {
-      timer = null;
-      flush();
-    }, delayMs);
+    timer = null;
   }
 
-  // 游戏里所有钱包写入都走这里：先落本地，再排队上传。
-  function persist(wallet) {
-    const next = normalizeWallet(wallet);
-    saveWallet(next, target, storageKey());
-    if (!accountId) return next;
-    pending = next;
-    schedule();
-    return next;
+  function schedule(ms = delayMs) {
+    cancelTimer();
+    timer = setTimer(() => { timer = null; flush(); }, ms);
   }
 
   function read() {
-    return loadWallet(target, storageKey());
+    return accountId ? normalizeWallet(state.wallet) : loadWallet(target, WALLET_KEY);
+  }
+
+  function persist(wallet) {
+    const next = normalizeWallet(wallet);
+    if (!accountId) {
+      saveWallet(next, target, WALLET_KEY);
+      return next;
+    }
+    const operation = walletOperation(state.wallet, next);
+    if (operation) state.outbox.push({ ...operation, sequence: ++state.sequence });
+    state.wallet = next;
+    save();
+    if (operation) schedule();
+    return next;
+  }
+
+  async function synchronize(refresh = false) {
+    cancelTimer();
+    if (!accountId) return false;
+    while (flight) {
+      await flight;
+      if (!accountId) return false;
+      if (!refresh && !state.outbox.length) return true;
+    }
+    if (!refresh && !state.outbox.length) return false;
+    const id = accountId;
+    const activeState = state;
+    const epoch = generation;
+    const work = async () => {
+      try {
+        if (!activeState.initialized) {
+          const bound = readJson(target, WALLET_BOUND_KEY, []);
+          const cached = normalizeWallet(activeState.initialWallet);
+          let remote;
+          if (!Array.isArray(bound) || !bound.includes(id)) {
+            remote = (await mergeWallet(loadWallet(target, WALLET_KEY), id))?.wallet;
+          } else {
+            const fetched = await fetchWallet();
+            if (fetched?.accountId && fetched.accountId !== id) throw new Error('Account changed');
+            remote = normalizeWallet(fetched?.wallet);
+            // Older saves have no journal; preserve their unsent income and purchases once.
+            if (cached.totalEarned > remote.totalEarned || cached.owned.some((item) => !remote.owned.includes(item))) {
+              remote = (await mergeWallet({ ...cached, coins: cached.totalEarned > remote.totalEarned ? cached.coins : remote.coins }, id))?.wallet;
+            }
+          }
+          if (epoch !== generation || id !== accountId) return false;
+          activeState.wallet = normalizeWallet(remote);
+          for (const operation of activeState.outbox) activeState.wallet = applyWalletOperation(activeState.wallet, operation).wallet;
+          activeState.initialized = true;
+          delete activeState.initialWallet;
+          try { target?.setItem?.(WALLET_BOUND_KEY, JSON.stringify([...new Set([...(Array.isArray(bound) ? bound : []), id])])); } catch { /* Optional migration marker. */ }
+          save();
+        }
+        do {
+          const operations = activeState.outbox.slice(0, 4);
+          const result = await syncWallet({ accountId: id, clientId: activeState.clientId, operations });
+          if (epoch !== generation || id !== accountId) return false;
+          if (!Number.isSafeInteger(result?.acknowledged) || !result.wallet
+            || (operations.length && result.acknowledged < operations.at(-1).sequence)) {
+            throw new Error('Invalid wallet acknowledgment');
+          }
+          activeState.outbox = activeState.outbox.filter((op) => op.sequence > result.acknowledged);
+          activeState.sequence = Math.max(activeState.sequence, result.acknowledged);
+          activeState.wallet = normalizeWallet(result.wallet);
+          for (const operation of activeState.outbox) {
+            activeState.wallet = applyWalletOperation(activeState.wallet, operation).wallet;
+          }
+          save();
+          notify();
+          retryMs = 2000;
+          setStatus(result.rejectedPurchases?.length ? '余额已在其他设备使用，部分购买未完成' : '');
+        } while (activeState.outbox.length);
+        return true;
+      } catch {
+        if (epoch === generation && id === accountId) {
+          setStatus('待同步，联网后自动重试');
+          if (activeState.outbox.length) schedule(retryMs);
+          retryMs = Math.min(60000, retryMs * 2);
+        }
+        return false;
+      }
+    };
+    const request = work();
+    flight = request;
+    try { return await request; } finally { if (flight === request) flight = null; }
+  }
+
+  const flush = () => synchronize();
+  async function refresh() {
+    await synchronize(true);
+    return read();
   }
 
   async function signIn(user) {
     const id = user?.id ? String(user.id) : null;
     if (!id) return signOut();
     await flush();
+    const epoch = ++generation;
     accountId = id;
     const cached = loadWallet(target, accountWalletKey(id));
-    try {
-      if (!isBound(id)) {
-        // 本机第一次绑这个账号：把游客钱包并上去，谁也不该因为登录丢东西。
-        const merged = await mergeWallet(loadWallet(target, WALLET_KEY));
-        markBound(id);
-        return adopt(merged?.wallet);
-      }
-      const remote = normalizeWallet((await fetchWallet())?.wallet);
-      // totalEarned 只增不减，本地更高说明上一次上传没成功，反过来把本地推上去。
-      if (cached.totalEarned > remote.totalEarned) {
-        pending = cached;
-        schedule();
-        return adopt(cached);
-      }
-      return adopt(remote);
-    } catch {
-      // 离线或服务端不可用：照常用本机缓存开玩，等下次写入再补推。
-      return adopt(cached);
-    }
+    const saved = readJson(target, walletOutboxKey(id), null);
+    const validSaved = saved && typeof saved.clientId === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(saved.clientId)
+      && Number.isSafeInteger(saved.sequence) && saved.sequence >= 0
+      && Array.isArray(saved.outbox) && saved.outbox.every(validWalletOperation);
+    state = validSaved ? { ...saved, wallet: normalizeWallet(saved.wallet) } : {
+      clientId: newClientId(), sequence: 0, wallet: cached, outbox: [], initialized: false, initialWallet: cached,
+    };
+    save();
+    const synchronized = await synchronize(true);
+    if (!synchronized && epoch === generation && accountId === id) notify();
+    return read();
   }
 
-  // 退出登录要在服务端会话失效之前调用，否则最后一次上传会 401。
-  async function signOut() {
-    await flush();
+  async function signOut({ flushPending = true } = {}) {
+    if (flushPending) await flush();
+    generation += 1;
+    cancelTimer();
     accountId = null;
-    pending = null;
-    const guest = loadWallet(target, WALLET_KEY);
-    notify(guest);
-    return guest;
+    state = null;
+    setStatus('');
+    return notify();
   }
 
-  if (typeof globalThis.window?.addEventListener === 'function') {
-    globalThis.window.addEventListener('pagehide', () => { flush(); });
+  // Online rewards already exist on the server and must never become earn operations.
+  function creditFromServer(amount) {
+    if (!accountId) return read();
+    state.wallet = normalizeWallet({ ...state.wallet, coins: state.wallet.coins + amount, totalEarned: state.wallet.totalEarned + amount });
+    save();
+    return notify();
   }
+
+  const onPageHide = () => { flush(); };
+  const onOnline = () => { if (accountId) refresh(); };
+  globalThis.window?.addEventListener?.('pagehide', onPageHide);
+  globalThis.window?.addEventListener?.('online', onOnline);
 
   return {
-    persist,
-    read,
-    flush,
-    signIn,
-    signOut,
-    subscribe,
-    get accountId() {
-      return accountId;
+    persist, read, flush, refresh, signIn, signOut, creditFromServer,
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    subscribeStatus(listener) { statusListeners.add(listener); return () => statusListeners.delete(listener); },
+    get status() { return status; },
+    get accountId() { return accountId; },
+    destroy() {
+      generation += 1;
+      cancelTimer();
+      globalThis.window?.removeEventListener?.('pagehide', onPageHide);
+      globalThis.window?.removeEventListener?.('online', onOnline);
     },
   };
 }
 
-// bootstrap 的首页和 main 的游戏内共用同一个实例：两个各自同步会互相覆盖。
 let shared = null;
-
 export function getWalletSync() {
   if (!shared) shared = createWalletSync();
   return shared;

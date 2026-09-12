@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { racePosition } from './race-fixtures.mjs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
@@ -72,7 +73,6 @@ try {
   const guestJoinedPromise = waitForMessage(guest, 'joined');
   send(guest, { type: 'join', name: 'Guest', code, password: 'sugar-42' });
   const guestJoined = await guestJoinedPromise;
-  const guestId = guestJoined.selfId;
   assert.equal(guestJoined.room.players.filter((player) => !player.spectator).length, 2);
 
   const spectator = await connect();
@@ -137,7 +137,7 @@ try {
     type: 'state', sequence: 1, x: 999, y: 0, z: 999, yaw: 0, speed: 150, progress: 2.9, lap: 3, finished: true,
   });
   send(host, {
-    type: 'state', sequence: 1, x: 12, y: 0.4, z: -8, yaw: 0.5, speed: 42, progress: 0.001, lap: 1, finished: false,
+    type: 'state', sequence: 1, ...racePosition(raceStart.map, 0.001, { variant: 'mirror' }), yaw: 0.5, speed: 42, progress: 0.001, lap: 1, finished: false,
   });
   const snapshot = await snapshotPromise;
   assert.equal(snapshot.players.length, 1, 'spectator state must not enter snapshots');

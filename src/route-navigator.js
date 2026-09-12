@@ -15,6 +15,11 @@ function headingOf(tangent) {
   return Math.atan2(tangent.x, tangent.z);
 }
 
+export function turnDirection(angle) {
+  // With +Z forward, the driver's screen-right vector is tangent x up (-X).
+  return angle > 0 ? 'left' : 'right';
+}
+
 function classify(angle) {
   const magnitude = Math.abs(angle);
   if (magnitude >= 1.02) return 'hairpin';
@@ -61,7 +66,7 @@ export function createRouteNavigator(curve, options = {}) {
           peakIndex = index + run;
         }
       }
-      const direction = peakAngle < 0 ? 'left' : 'right';
+      const direction = turnDirection(peakAngle);
       const severity = classify(peakAngle);
       return {
         progress: wrap01(progress + stepProgress * peakIndex),

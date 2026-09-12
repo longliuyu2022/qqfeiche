@@ -40,7 +40,7 @@ import { DEFAULT_CAR_ID, getCarById, applyCarPhysics } from './car-catalog.js';
 import { createHeroCarVariant } from './procedural-vehicle.js';
 import { computeVehicleAnimationPose } from './vehicle-animation.js';
 import { createGhostPlayer, createGhostRecorder, serializeGhost, deserializeGhost } from './ghost.js';
-import { earnCoins, getItemById, isOwned, normalizeWallet } from './shop.js';
+import { earnCoins, getItemById, isOwned } from './shop.js';
 import { getWalletSync } from './wallet-sync.js';
 import { createShopUi } from './shop-ui.js';
 import { createAchievementsUi } from './achievements-ui.js';
@@ -61,6 +61,7 @@ import {
 } from './ranked.js';
 import { difficultyRule, trackVariantRule } from './race-rules.js';
 import { createTrackVariantCurve, variantWorldOptions, applyWorldVariant } from './track-variant.js';
+import { buildCornerMarkers } from './track-guidance.js';
 import { createRouteNavigator } from './route-navigator.js';
 import { loadChallengeState, saveChallengeState, updateChallenges } from './challenges.js';
 import { createTrainingCoach } from './training.js';
@@ -229,6 +230,7 @@ const world = activeTrackRuntime.createWorld(scene, {
 applyWorldVariant(world, activeTrackVariant.id);
 const featureMeshes = buildTrackFeatureMeshes(trackFeatures, { theme: activeTrackId });
 scene.add(featureMeshes);
+scene.add(buildCornerMarkers(trackCurve, { theme: activeTrackId, qualityTier, shortcutZones: featureZones.shortcuts, ground: world.ground }));
 const selectedCar = getCarById(preferences.carId);
 const ownedCar = isOwned(getWalletSync().read(), selectedCar.id) ? selectedCar : getCarById(DEFAULT_CAR_ID);
 // The detailed 12 MB car must never block the first rendered frame. Start with
@@ -399,11 +401,8 @@ const desiredCamera = new THREE.Vector3();
 const lookTarget = new THREE.Vector3();
 const forward = new THREE.Vector3();
 const right = new THREE.Vector3();
-const trackSide = new THREE.Vector3();
 const tempPoint = new THREE.Vector3();
 const tempTangent = new THREE.Vector3();
-const tempQuaternion = new THREE.Quaternion();
-const tempMatrix = new THREE.Matrix4();
 const up = new THREE.Vector3(0, 1, 0);
 const particleSpawn = new THREE.Vector3();
 const particleVelocity = new THREE.Vector3();
@@ -2070,15 +2069,10 @@ raceSystem.on('finish', async (result) => {
     walletSync.persist(wallet);
   }
   // 联机奖励已经由服务端记在账号上，这里只把本地钱包对齐，避免玩家要等下一次
-  // 同步才看到金币。coins 和 totalEarned 同时加，跟服务端 credit 的口径一致，
-  // 本地这份才不会在下次上报时被判成过期存档。
+  // 同步才看到金币；这笔钱不进入本地收入队列，避免被重复上传。
   if (onlineCoins > 0) {
-    wallet = normalizeWallet({
-      ...wallet,
-      coins: wallet.coins + onlineCoins,
-      totalEarned: wallet.totalEarned + onlineCoins,
-    });
-    walletSync.persist(wallet);
+    wallet = walletSync.creditFromServer(onlineCoins);
+    wallet = await walletSync.refresh();
     renderWallet();
   }
   const achievementOutcome = isOnline || activeMode === 'training' ? null : evaluateAchievements(achievementState, {

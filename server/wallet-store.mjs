@@ -1,7 +1,6 @@
 // 账号钱包的服务端持久化：金币、已购道具和装备槽跟着账号走，换设备登录能对上。
-// 落盘方式照搬 ranked-store.mjs（临时文件 + rename 原子替换、dirty 阈值 + 定时 flush、
-// 按 updatedAt 淘汰），钱包的字段校验则一律走 src/shop.js 的 normalizeWallet，
-// 避免商品目录和金币上限在前后端各写一套。
+// 临时文件 + rename 原子替换；操作序号与钱包一起落盘后才确认同步。
+// 字段校验共用 src/shop.js，避免前后端商品目录和金币上限漂移。
 import { randomBytes } from 'node:crypto';
 import {
   mkdirSync, readFileSync, renameSync, rmSync, writeFileSync,
@@ -10,6 +9,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EQUIP_SLOTS, createDefaultWallet, normalizeWallet } from './shop-catalog.mjs';
 import { isValidPlayerId, normalizePlayerId } from './ranked-store.mjs';
+import { applyWalletOperation, validWalletOperation } from './wallet-operations.mjs';
 
 export const WALLET_STORE_VERSION = 1;
 
@@ -26,23 +26,24 @@ function readStoredWallets(filePath) {
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(filePath, 'utf8'));
-  } catch {
-    return new Map();
+  } catch (error) {
+    if (error.code === 'ENOENT') return new Map();
+    throw new Error('Unable to read wallet store; refusing to overwrite existing data', { cause: error });
   }
   const entries = new Map();
   const wallets = parsed?.wallets;
-  if (!wallets || typeof wallets !== 'object') return entries;
+  if (parsed?.version !== WALLET_STORE_VERSION || !wallets || typeof wallets !== 'object' || Array.isArray(wallets)) {
+    throw new Error('Invalid wallet snapshot; refusing to overwrite existing data');
+  }
   for (const [accountId, value] of Object.entries(wallets)) {
     // 账号 id 是 randomUUID()，与联机侧接受的 player id 形状一致。
     if (!isValidPlayerId(accountId)) continue;
-    entries.set(accountId, normalizeWallet(value));
+    const clients = Object.fromEntries(Object.entries(value?.clients ?? {}).filter(([id, sequence]) => (
+      isValidPlayerId(id) && Number.isSafeInteger(sequence) && sequence >= 0
+    )));
+    entries.set(accountId, { ...normalizeWallet(value), clients });
   }
   return entries;
-}
-
-function stateTimestamp(wallet) {
-  const value = wallet?.updatedAt;
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 // 首次把本地游客钱包绑上账号时用：谁也不该因为登录而丢东西，
@@ -78,14 +79,6 @@ export function createWalletStore({
     : null;
   timer?.unref?.();
 
-  // 与排位表同理：给文件设上限，最久没更新的先丢。
-  function evict() {
-    if (wallets.size <= maxAccounts) return;
-    const ordered = [...wallets.entries()].sort((a, b) => stateTimestamp(a[1]) - stateTimestamp(b[1]));
-    const excess = wallets.size - maxAccounts;
-    for (let index = 0; index < excess; index += 1) wallets.delete(ordered[index][0]);
-  }
-
   function serialize() {
     const output = {};
     for (const [accountId, wallet] of wallets) output[accountId] = { ...wallet };
@@ -117,19 +110,49 @@ export function createWalletStore({
     const id = normalizePlayerId(accountId);
     if (!id) return createDefaultWallet();
     const stored = wallets.get(id);
-    return stored ? { ...stored } : createDefaultWallet();
+    return stored ? normalizeWallet(stored) : createDefaultWallet();
   }
 
-  function write(id, wallet) {
-    const next = { ...normalizeWallet(wallet), updatedAt: now() };
+  function write(id, wallet, clients = wallets.get(id)?.clients ?? {}) {
+    if (!wallets.has(id) && wallets.size >= maxAccounts) throw new Error('Wallet account capacity reached');
+    const next = { ...normalizeWallet(wallet), updatedAt: now(), clients };
     wallets.set(id, next);
-    evict();
     dirty += 1;
     if (dirty >= dirtyThreshold) flush();
-    return { ...next };
+    return normalizeWallet(next);
   }
 
-  // 整份覆盖：客户端是钱包的唯一计算方，服务端只负责校验和保存。
+  function sync(accountId, { clientId, operations } = {}) {
+    if (closed) return null;
+    const id = normalizePlayerId(accountId);
+    if (!id || !isValidPlayerId(clientId) || !Array.isArray(operations)
+      || operations.length > 16 || !operations.every(validWalletOperation)) {
+      throw new TypeError('Invalid wallet operations');
+    }
+    const clients = wallets.get(id)?.clients ?? {};
+    let acknowledged = Object.hasOwn(clients, clientId) ? clients[clientId] : 0;
+    if (!Object.hasOwn(clients, clientId) && Object.keys(clients).length >= 128) {
+      throw new TypeError('Wallet device limit reached');
+    }
+    let wallet = get(id);
+    const rejectedPurchases = [];
+    let changed = false;
+    for (const operation of operations) {
+      if (operation.sequence <= acknowledged) continue;
+      if (operation.sequence !== acknowledged + 1) throw new TypeError('Wallet operation sequence gap');
+      const result = applyWalletOperation(wallet, operation);
+      wallet = result.wallet;
+      rejectedPurchases.push(...result.rejected);
+      acknowledged = operation.sequence;
+      changed = true;
+    }
+    if (changed) wallet = write(id, wallet, { ...clients, [clientId]: acknowledged });
+    // Acknowledgments must survive a restart, including a retry after a lost response.
+    if (dirty && !flush()) throw new Error('Wallet persistence unavailable');
+    return { wallet, acknowledged, rejectedPurchases };
+  }
+
+  // 兼容旧客户端的快照写入；新版客户端使用 sync 操作队列。
   // 唯一的例外是防清零 —— totalEarned 在设计上只增不减（earnCoins 只会往上加，
   // 购买扣的是 coins），所以传上来的 totalEarned 比库里小，只可能是这台设备的
   // 本地存档被清了或严重过期。这种写入退化成合并，宁可多给也不能把账号洗白。
@@ -186,6 +209,7 @@ export function createWalletStore({
     get,
     put,
     merge,
+    sync,
     credit,
     snapshot: serialize,
     flush,

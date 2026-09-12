@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { attachMapArtLayout, curveArtFrame } from './map-art-layouts.js';
+import { createScenicTerrain, createReliefGeometry, createPalmCrownGeometry } from './scenic-terrain.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const FORWARD = new THREE.Vector3(0, 0, 1);
@@ -55,16 +56,16 @@ const THEMES = Object.freeze({
     skyTop: 0x081523, skyHorizon: 0x6e93ad, fog: 0x9eb5c4, fogDensity: 0.00115,
     sun: 0xcce9ff, sunIntensity: 2.65, sunPosition: [-260, 360, -80],
     hemisphereSky: 0xcceaff, hemisphereGround: 0x253542, hemisphereIntensity: 1.75,
-    ground: 0x81949b, shoulder: 0xcbd7da, rock: 0x495b67, accent: 0x5de7ff,
+    ground: 0xb1c6c9, shoulder: 0xcbd7da, rock: 0x637b87, accent: 0x5de7ff,
     curbA: 0x28b9d1, curbB: 0xecf7f7, foliage: [0x173c36, 0x215348, 0x2e6554],
     materialAsset: 'dark_rock', groundBase: -4, cloudColor: 0xd9e7ed,
   }),
   canyon: Object.freeze({
     name: 'RedMesaCanyonWorld', roadName: 'RedMesaCircuitRoad', seed: 0xca990026,
-    skyTop: 0x17304a, skyHorizon: 0xf29a62, fog: 0xd99062, fogDensity: 0.00102,
+    skyTop: 0x426c89, skyHorizon: 0xe6b08a, fog: 0xd9aa88, fogDensity: 0.00085,
     sun: 0xffd0a0, sunIntensity: 3.65, sunPosition: [-340, 190, 250],
-    hemisphereSky: 0xffd5b0, hemisphereGround: 0x5d2f24, hemisphereIntensity: 1.7,
-    ground: 0x9b4d32, shoulder: 0xc7794d, rock: 0x8b3f2d, accent: 0xffbd54,
+    hemisphereSky: 0xe3e6eb, hemisphereGround: 0x785947, hemisphereIntensity: 1.9,
+    ground: 0xae795c, shoulder: 0xb99473, rock: 0xb07454, accent: 0xffbd54,
     curbA: 0xf4d191, curbB: 0x552b2a, foliage: [0x526b3b, 0x6e7c43, 0x88914c],
     materialAsset: 'dark_rock', groundBase: -7, cloudColor: 0xffd8bd,
   }),
@@ -73,7 +74,7 @@ const THEMES = Object.freeze({
     skyTop: 0x1974a5, skyHorizon: 0x9ee3ee, fog: 0xa7d9df, fogDensity: 0.00082,
     sun: 0xfff1ca, sunIntensity: 3.55, sunPosition: [-240, 330, 180],
     hemisphereSky: 0xd8f5ff, hemisphereGround: 0x315b4c, hemisphereIntensity: 1.95,
-    ground: 0x49735b, shoulder: 0xd3cfb8, rock: 0x65716b, accent: 0x35e7ff,
+    ground: 0x54784e, shoulder: 0xd3cfb8, rock: 0xbcc4b3, accent: 0x35e7ff,
     curbA: 0x168cb4, curbB: 0xf5f0dc, foliage: [0x174f46, 0x23715b, 0x3d8a63],
     materialAsset: 'dark_rock', groundBase: -5, cloudColor: 0xf4fbff,
   }),
@@ -342,39 +343,6 @@ export function createShortcutMask(shortcutZones) {
   };
 }
 
-function createMountainGeometry(segments = 16, rings = 8) {
-  const positions = [];
-  const indices = [];
-  for (let ring = 0; ring <= rings; ring += 1) {
-    const t = ring / rings;
-    const radius = ring === rings ? 0.045 : Math.pow(1 - t, 0.92) * (0.94 + Math.sin(ring * 2.7) * 0.06);
-    for (let segment = 0; segment < segments; segment += 1) {
-      const angle = (segment / segments) * Math.PI * 2;
-      const variation = 1 + Math.sin(angle * 3 + ring * 1.7) * 0.09 + Math.cos(angle * 5 - ring) * 0.045;
-      positions.push(
-        Math.cos(angle) * radius * variation,
-        t,
-        Math.sin(angle) * radius * variation,
-      );
-    }
-  }
-  for (let ring = 0; ring < rings; ring += 1) {
-    for (let segment = 0; segment < segments; segment += 1) {
-      const next = (segment + 1) % segments;
-      const a = ring * segments + segment;
-      const b = ring * segments + next;
-      const c = (ring + 1) * segments + segment;
-      const d = (ring + 1) * segments + next;
-      indices.push(a, c, b, b, c, d);
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
 function loadTexture(asset, file, isColor = false) {
   if (typeof document === 'undefined') return Promise.resolve(null);
   const url = `${BASE_URL}/assets/environment/polyhaven/${asset}/${file}`;
@@ -395,13 +363,14 @@ function loadTexture(asset, file, isColor = false) {
   });
 }
 
-function applyPbr(material, asset, repeat = [1, 1]) {
+function applyPbr(material, asset, repeat = [1, 1], { colorMap = true } = {}) {
   const files = [
     ['map', 'diffuse.jpg', true],
     ['normalMap', 'normal-gl.jpg', false],
     ['roughnessMap', 'roughness.jpg', false],
   ];
   for (const [property, file, isColor] of files) {
+    if (property === 'map' && !colorMap) continue;
     loadTexture(asset, file, isColor).then((texture) => {
       if (!texture) return;
       texture.repeat.set(repeat[0], repeat[1]);
@@ -451,7 +420,7 @@ function ribbonGeometry(curve, width, yOffset = 0, samples = 620) {
   return geometry;
 }
 
-function embankmentGeometry(curve, direction, samples = 420) {
+function embankmentGeometry(curve, direction, terrain, samples = 520) {
   const positions = [];
   const uvs = [];
   const indices = [];
@@ -466,7 +435,7 @@ function embankmentGeometry(curve, direction, samples = 420) {
       point.y - 0.25,
       point.z + side.z * 10.4 * direction,
       point.x + side.x * 22 * direction,
-      point.y - 10.5,
+      terrain.heightAt(point.x + side.x * 22 * direction, point.z + side.z * 22 * direction) - 0.1,
       point.z + side.z * 22 * direction,
     );
     uvs.push(0, progress * 26, 1, progress * 26);
@@ -527,38 +496,43 @@ function createSky(root, theme) {
   return sky;
 }
 
-function createGround(root, theme, random, qualityTier, curve, clearance) {
-  const segments = qualityTier === 'balanced' ? 44 : qualityTier === 'ultra' ? 108 : 72;
-  const geometry = new THREE.PlaneGeometry(1450, 1450, segments, segments);
+function createGround(root, theme, random, qualityTier, curve, clearance, terrain, kind) {
+  const geometry = terrain.geometry;
   const positions = geometry.attributes.position;
+  const normals = geometry.attributes.normal;
+  const colors = [];
+  const groundColor = new THREE.Color(theme.ground);
+  const rockColor = new THREE.Color(theme.rock);
+  const color = new THREE.Color();
   for (let index = 0; index < positions.count; index += 1) {
     const x = positions.getX(index);
-    const y = positions.getY(index);
-    const radial = Math.hypot(x, y);
-    const height = theme.groundBase
-      + Math.sin(x * 0.013) * 3.2
-      + Math.cos(y * 0.016) * 2.7
-      + Math.sin((x + y) * 0.006) * Math.min(12, radial * 0.015);
-    positions.setZ(index, height);
+    const z = positions.getZ(index);
+    color.copy(groundColor).lerp(rockColor, THREE.MathUtils.smoothstep(1 - normals.getY(index), 0.08, 0.4));
+    color.multiplyScalar(0.92 + Math.sin(x * 0.045) * Math.cos(z * 0.037) * 0.08);
+    colors.push(color.r, color.g, color.b);
   }
-  geometry.computeVertexNormals();
-  const material = new THREE.MeshStandardMaterial({ color: theme.ground, roughness: 0.98, metalness: 0.01 });
-  applyPbr(material, theme.materialAsset, [18, 18]);
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.98, metalness: 0.01 });
+  applyPbr(material, theme.materialAsset, [75, 75], { colorMap: false });
+  material.normalScale.set(0.45, 0.45);
   const ground = new THREE.Mesh(geometry, material);
-  ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   ground.name = `${theme.name}Terrain`;
   markClearanceExempt(ground, CLEARANCE_EXEMPT.TERRAIN);
   root.add(ground);
 
-  const mountainCount = qualityTier === 'balanced' ? 32 : qualityTier === 'ultra' ? 76 : 54;
-  const mountainGeometry = createMountainGeometry(qualityTier === 'balanced' ? 14 : qualityTier === 'ultra' ? 24 : 18, qualityTier === 'ultra' ? 10 : 8);
-  const rockMaterial = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.94, flatShading: false });
-  applyPbr(rockMaterial, 'dark_rock', [2, 3]);
-  const mountains = new THREE.InstancedMesh(mountainGeometry, rockMaterial, mountainCount);
+  const mountainCount = qualityTier === 'balanced' ? 24 : qualityTier === 'ultra' ? 42 : 33;
+  const rockMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.94 });
+  applyPbr(rockMaterial, 'dark_rock', [2, 3], { colorMap: false });
+  rockMaterial.normalScale.set(0.65, 0.65);
+  const mountainMeshes = Array.from({ length: 3 }, (_, variant) => {
+    const mesh = new THREE.InstancedMesh(createReliefGeometry(kind, { variant, qualityTier }), rockMaterial, mountainCount);
+    mesh.count = 0;
+    mesh.name = `${kind}Relief_${variant}`;
+    return mesh;
+  });
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
-  const mountainTransforms = [];
   const point = new THREE.Vector3();
   const tangent = new THREE.Vector3();
   const side = new THREE.Vector3();
@@ -569,9 +543,11 @@ function createGround(root, theme, random, qualityTier, curve, clearance) {
     const progress = ((index + 0.5) / mountainCount + (random() - 0.5) * 0.006) % 1;
     trackFrame(curve, (progress + 1) % 1, point, tangent, side);
     const outward = clearance.outwardSign(point, side);
-    const width = 58 + random() * 92;
-    const height = 90 + random() * (theme.name.includes('Alpine') ? 210 : 145);
+    const width = kind === 'coast' ? 62 + random() * 70 : 65 + random() * 95;
+    const height = kind === 'alpine' ? 120 + random() * 180 : kind === 'canyon' ? 75 + random() * 125 : 35 + random() * 65;
     const scale = new THREE.Vector3(width, height, width * (0.72 + random() * 0.6));
+    const mountains = mountainMeshes[index % mountainMeshes.length];
+    const mountainGeometry = mountains.geometry;
     const radius = horizontalRadius(mountainGeometry, scale);
     const spread = random();
     quaternion.setFromAxisAngle(UP, random() * Math.PI);
@@ -586,46 +562,28 @@ function createGround(root, theme, random, qualityTier, curve, clearance) {
       };
     }, 5);
     if (!candidate) continue;
-    const position = new THREE.Vector3(candidate.x, theme.groundBase - 4, candidate.z);
+    const position = new THREE.Vector3(candidate.x, terrain.baseHeightAt(candidate.x, candidate.z) - 6, candidate.z);
     matrix.compose(
       position,
       quaternion,
       scale,
     );
-    mountains.setMatrixAt(mountainTransforms.length, matrix);
-    mountainTransforms.push({ position: position.clone(), scale: scale.clone() });
+    mountains.setMatrixAt(mountains.count++, matrix);
   }
-  // Instances that could not find a clear spot are dropped from the draw range
-  // so no giant untransformed ghost is left sitting at the world origin.
-  mountains.count = mountainTransforms.length;
-  mountains.castShadow = qualityTier !== 'balanced';
-  mountains.receiveShadow = true;
-  root.add(mountains);
-
-  if (theme.name.includes('Alpine')) {
-    const capMaterial = new THREE.MeshStandardMaterial({ color: 0xb8cbd1, roughness: 0.94, metalness: 0.01 });
-    const caps = new THREE.InstancedMesh(mountainGeometry, capMaterial, mountainTransforms.length);
-    for (let index = 0; index < mountainTransforms.length; index += 1) {
-      const source = mountainTransforms[index];
-      const capScale = source.scale.clone().multiply(new THREE.Vector3(0.28, 0.12, 0.28));
-      matrix.compose(
-        source.position.clone().add(new THREE.Vector3(0, source.scale.y * 0.84, 0)),
-        quaternion.identity(),
-        capScale,
-      );
-      caps.setMatrixAt(index, matrix);
-    }
-    caps.receiveShadow = true;
-    root.add(caps);
+  for (const mountains of mountainMeshes) {
+    mountains.castShadow = qualityTier !== 'balanced';
+    mountains.receiveShadow = true;
+    root.add(mountains);
   }
   return ground;
 }
 
-function createRoad(root, curve, theme, qualityTier, shortcuts) {
-  const rockMaterial = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.9 });
-  applyPbr(rockMaterial, theme.materialAsset, [2, 20]);
+function createRoad(root, curve, theme, qualityTier, shortcuts, terrain) {
+  const rockMaterial = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.9, side: THREE.DoubleSide });
+  applyPbr(rockMaterial, theme.materialAsset, [2, 3], { colorMap: false });
   for (const direction of [-1, 1]) {
-    const embankment = new THREE.Mesh(embankmentGeometry(curve, direction), rockMaterial);
+    const embankment = new THREE.Mesh(embankmentGeometry(curve, direction, terrain), rockMaterial);
+    embankment.name = `RoadFoundation_${direction}`;
     embankment.receiveShadow = true;
     markClearanceExempt(embankment, CLEARANCE_EXEMPT.ROAD);
     root.add(embankment);
@@ -644,7 +602,7 @@ function createRoad(root, curve, theme, qualityTier, shortcuts) {
     roughness: theme.name.includes('Coast') ? 0.68 : 0.76,
     metalness: 0.08,
   });
-  applyPbr(roadMaterial, 'asphalt_02', [1.35, 64]);
+  applyPbr(roadMaterial, 'asphalt_02', [2.4, curve.getLength() / (68 * 6.67)]);
   roadMaterial.normalScale.set(0.65, 0.65);
   const road = new THREE.Mesh(ribbonGeometry(curve, 8, 0.11), roadMaterial);
   road.receiveShadow = true;
@@ -674,8 +632,9 @@ function createRoad(root, curve, theme, qualityTier, shortcuts) {
   markClearanceExempt(markers, CLEARANCE_EXEMPT.ROAD);
   root.add(markers);
 
-  const curbCount = qualityTier === 'balanced' ? 154 : 220;
-  const curbGeometry = new THREE.BoxGeometry(0.68, 0.18, 3.35);
+  const curbCount = Math.ceil(curve.getLength() / 4);
+  const segmentLength = curve.getLength() / curbCount;
+  const curbGeometry = new THREE.BoxGeometry(0.68, 0.18, 1);
   const curbMaterials = [theme.curbA, theme.curbB].map((color) => (
     new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.04 })
   ));
@@ -684,40 +643,71 @@ function createRoad(root, curve, theme, qualityTier, shortcuts) {
     new THREE.InstancedMesh(curbGeometry, curbMaterials[1], curbCount),
   ];
   const railMaterial = new THREE.MeshStandardMaterial({ color: 0xaebbc0, metalness: 0.72, roughness: 0.32 });
-  const rails = new THREE.InstancedMesh(new THREE.BoxGeometry(0.13, 0.36, 3.45), railMaterial, curbCount * 2);
+  const rails = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.44, 1), railMaterial, curbCount * 2);
+  rails.name = 'ContinuousGuardrails';
   rails.userData.guardrail = true;
+  const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.17, 1.02, 0.19), railMaterial, curbCount * 2);
+  posts.name = 'GuardrailPosts';
+  posts.userData.guardrail = true;
+  const reflectors = new THREE.InstancedMesh(new THREE.BoxGeometry(0.22, 0.12, 0.12), new THREE.MeshStandardMaterial({
+    color: 0xffe6aa, emissive: 0xffc66a, emissiveIntensity: 0.35, roughness: 0.45,
+  }), curbCount * 2);
+  reflectors.name = 'GuardrailReflectors';
+  const edgePoint = (progress, offset, lift) => {
+    const p = curve.getPointAt(THREE.MathUtils.euclideanModulo(progress, 1));
+    const t = curve.getTangentAt(THREE.MathUtils.euclideanModulo(progress, 1));
+    return p.addScaledVector(new THREE.Vector3(t.z, 0, -t.x).normalize(), offset).addScaledVector(UP, lift);
+  };
+  const composeSegment = (start, end, overlap = 0) => {
+    quaternion.setFromUnitVectors(FORWARD, end.clone().sub(start).normalize());
+    matrix.compose(start.clone().lerp(end, 0.5), quaternion, new THREE.Vector3(1, 1, start.distanceTo(end) + overlap));
+  };
   let railIndex = 0;
+  let postIndex = 0;
+  const curbIndices = [0, 0];
   for (let index = 0; index < curbCount; index += 1) {
     const progress = index / curbCount;
-    trackFrame(curve, progress, point, tangent, side);
-    quaternion.setFromUnitVectors(FORWARD, tangent);
+    const endProgress = (index + 1) / curbCount;
     for (const [slot, direction] of [-1, 1].entries()) {
-      const curbPoint = point.clone().addScaledVector(side, 8.3 * direction).add(new THREE.Vector3(0, 0.22, 0));
-      matrix.compose(curbPoint, quaternion, new THREE.Vector3(1, 1, 1));
-      curbMeshes[(index + slot) % 2].setMatrixAt(index, matrix);
-      // Shortcut mouths get an opening in the rail so the branch is drivable.
-      if (shortcuts.isOpen(progress, direction)) continue;
-      const railPoint = point.clone().addScaledVector(side, 9.45 * direction).add(new THREE.Vector3(0, 0.68, 0));
-      matrix.compose(railPoint, quaternion, new THREE.Vector3(1, 1, 1));
+      // Check the full segment, including its ends, before extending a rail.
+      if ([progress, (progress + endProgress) / 2, endProgress].some((t) => shortcuts.isOpen(t, direction))) continue;
+      const curbSlot = (index + slot) % 2;
+      composeSegment(edgePoint(progress, 8.3 * direction, 0.2), edgePoint(endProgress, 8.3 * direction, 0.2));
+      curbMeshes[curbSlot].setMatrixAt(curbIndices[curbSlot]++, matrix);
+      const railStart = edgePoint(progress, 9.45 * direction, 0.83);
+      const railEnd = edgePoint(endProgress, 9.45 * direction, 0.83);
+      composeSegment(railStart, railEnd, 0.04);
       rails.setMatrixAt(railIndex, matrix);
       railIndex += 1;
+      if (index % 2 === 0) {
+        matrix.compose(edgePoint(progress, 9.45 * direction, 0.48), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1));
+        posts.setMatrixAt(postIndex, matrix);
+        matrix.setPosition(edgePoint(progress, 9.45 * direction, 1.1));
+        reflectors.setMatrixAt(postIndex++, matrix);
+      }
     }
   }
-  for (const mesh of curbMeshes) {
+  for (const [slot, mesh] of curbMeshes.entries()) {
+    mesh.count = curbIndices[slot];
     mesh.castShadow = qualityTier !== 'balanced';
     mesh.receiveShadow = true;
     markClearanceExempt(mesh, CLEARANCE_EXEMPT.FURNITURE);
     root.add(mesh);
   }
   rails.count = railIndex;
-  rails.castShadow = qualityTier !== 'balanced';
-  rails.receiveShadow = true;
-  markClearanceExempt(rails, CLEARANCE_EXEMPT.FURNITURE);
-  root.add(rails);
+  posts.count = postIndex;
+  reflectors.count = postIndex;
+  rails.userData.segmentLength = segmentLength;
+  for (const mesh of [rails, posts, reflectors]) {
+    mesh.castShadow = qualityTier !== 'balanced';
+    mesh.receiveShadow = true;
+    markClearanceExempt(mesh, CLEARANCE_EXEMPT.FURNITURE);
+    root.add(mesh);
+  }
   return road;
 }
 
-function createTracksideVegetation(root, curve, theme, random, qualityTier, kind, clearance) {
+function createTracksideVegetation(root, curve, theme, random, qualityTier, kind, clearance, terrain) {
   const count = qualityTier === 'balanced' ? 92 : qualityTier === 'ultra' ? 300 : 190;
   const point = new THREE.Vector3();
   const tangent = new THREE.Vector3();
@@ -729,9 +719,9 @@ function createTracksideVegetation(root, curve, theme, random, qualityTier, kind
   trunkGeometry.translate(0, 0.5, 0);
   const trunks = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, count);
   const crownGeometry = kind === 'coast'
-    ? new THREE.ConeGeometry(1, 0.22, 9)
+    ? createPalmCrownGeometry()
     : new THREE.ConeGeometry(1, 2.4, kind === 'canyon' ? 7 : 9);
-  const crownMaterials = theme.foliage.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.92, flatShading: true }));
+  const crownMaterials = theme.foliage.map((color) => new THREE.MeshStandardMaterial({ color, roughness: 0.92, flatShading: true, side: kind === 'coast' ? THREE.DoubleSide : THREE.FrontSide }));
   const crowns = crownMaterials.map((material) => new THREE.InstancedMesh(crownGeometry, material, Math.ceil(count / crownMaterials.length)));
   const crownIndices = crowns.map(() => 0);
   let placedTrunks = 0;
@@ -742,10 +732,10 @@ function createTracksideVegetation(root, curve, theme, random, qualityTier, kind
     const direction = random() > 0.5 ? 1 : -1;
     const spread = random();
     const height = kind === 'canyon' ? 4 + random() * 7 : kind === 'coast' ? 7 + random() * 8 : 8 + random() * 12;
-    const drop = 1.2 + random() * 4;
+    const burial = 0.15 + random() * 0.2;
     quaternion.setFromAxisAngle(UP, random() * Math.PI * 2);
     const crownScale = kind === 'coast'
-      ? new THREE.Vector3(5 + random() * 4, 1, 5 + random() * 4)
+      ? new THREE.Vector3(5 + random() * 4, 5, 5 + random() * 4)
       : kind === 'canyon'
         ? new THREE.Vector3(1.3 + random(), 2 + random() * 1.5, 1.3 + random())
         : new THREE.Vector3(2.5 + random() * 2, height * 0.34, 2.5 + random() * 2);
@@ -762,7 +752,7 @@ function createTracksideVegetation(root, curve, theme, random, qualityTier, kind
       };
     }, 6);
     if (!candidate) continue;
-    const position = new THREE.Vector3(candidate.x, point.y - drop, candidate.z);
+    const position = new THREE.Vector3(candidate.x, terrain.heightAt(candidate.x, candidate.z) - burial, candidate.z);
     matrix.compose(position, quaternion, new THREE.Vector3(1, height, 1));
     trunks.setMatrixAt(placedTrunks, matrix);
     placedTrunks += 1;
@@ -774,6 +764,7 @@ function createTracksideVegetation(root, curve, theme, random, qualityTier, kind
     crownIndices[crownSlot] += 1;
   }
   trunks.count = placedTrunks;
+  trunks.name = 'GroundedTreeTrunks';
   trunks.castShadow = qualityTier !== 'balanced';
   trunks.receiveShadow = true;
   root.add(trunks);
@@ -785,14 +776,13 @@ function createTracksideVegetation(root, curve, theme, random, qualityTier, kind
   }
 }
 
-function createRockFormations(root, curve, theme, random, qualityTier, kind, clearance) {
+function createRockFormations(root, curve, theme, random, qualityTier, kind, clearance, terrain) {
   const count = qualityTier === 'balanced' ? 38 : qualityTier === 'ultra' ? 110 : 72;
   const geometry = kind === 'canyon'
-    ? new THREE.CylinderGeometry(0.72, 1, 1, 9, 3)
+    ? createReliefGeometry('canyon', { variant: 3, qualityTier })
     : new THREE.DodecahedronGeometry(1, 1);
-  geometry.translate(0, kind === 'canyon' ? 0.5 : 0, 0);
-  const material = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.88, flatShading: true });
-  applyPbr(material, 'dark_rock', [1.6, 2.4]);
+  const material = new THREE.MeshStandardMaterial({ color: kind === 'canyon' ? 0xffffff : theme.rock, vertexColors: kind === 'canyon', roughness: 0.88, flatShading: kind !== 'canyon' });
+  applyPbr(material, 'dark_rock', [1.6, 2.4], { colorMap: false });
   const rocks = new THREE.InstancedMesh(geometry, material, count);
   const point = new THREE.Vector3();
   const tangent = new THREE.Vector3();
@@ -805,7 +795,7 @@ function createRockFormations(root, curve, theme, random, qualityTier, kind, cle
     trackFrame(curve, progress, point, tangent, side);
     const direction = random() > 0.5 ? 1 : -1;
     const spread = random();
-    const drop = 10 + random() * 14;
+    const burial = 1 + random() * 3;
     quaternion.setFromAxisAngle(UP, random() * Math.PI * 2);
     const width = 7 + random() * (kind === 'canyon' ? 20 : 13);
     const height = kind === 'canyon' ? 20 + random() * 62 : 8 + random() * 26;
@@ -823,7 +813,7 @@ function createRockFormations(root, curve, theme, random, qualityTier, kind, cle
       };
     }, 6);
     if (!candidate) continue;
-    const position = new THREE.Vector3(candidate.x, point.y - drop, candidate.z);
+    const position = new THREE.Vector3(candidate.x, terrain.heightAt(candidate.x, candidate.z) + (kind === 'canyon' ? -burial : height * 0.38), candidate.z);
     matrix.compose(position, quaternion, scale);
     rocks.setMatrixAt(placed, matrix);
     placed += 1;
@@ -835,12 +825,13 @@ function createRockFormations(root, curve, theme, random, qualityTier, kind, cle
   return rocks;
 }
 
-function createScenicEnvironmentHLOD(root, trackId, qualityTier, curve, clearance, options) {
+function createScenicEnvironmentHLOD(root, trackId, qualityTier, curve, clearance, options, terrain) {
   return attachMapArtLayout(root, trackId, qualityTier, clearance, (progress) => (
     curveArtFrame(curve, progress)
   ), {
     name: `${trackId}EnvironmentHLOD`,
     bakedLighting: true,
+    groundHeightAt: terrain.heightAt,
     onError: options.onEnvironmentAssetError,
   });
 }
@@ -1020,7 +1011,7 @@ function createOcean(root) {
   return ocean;
 }
 
-function createAlpineLandmark(root, curve, theme, clearance) {
+function createAlpineLandmark(root, curve, theme, clearance, terrain) {
   const ice = new THREE.Mesh(
     new THREE.CircleGeometry(86, 48),
     new THREE.MeshPhysicalMaterial({ color: 0x83c9dd, roughness: 0.18, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.12 }),
@@ -1049,37 +1040,50 @@ function createAlpineLandmark(root, curve, theme, clearance) {
     const x = point.x + side.x * outward * distance;
     const z = point.z + side.z * outward * distance;
     if (!clearance.clears(x, z, towerRadius)) continue;
-    const tower = new THREE.Mesh(new THREE.BoxGeometry(1.2, 20, 1.2), towerMaterial);
-    tower.position.set(x, point.y + 8, z);
+    const bottom = terrain.heightAt(x, z) - 0.5;
+    const top = point.y + 18;
+    const tower = new THREE.Mesh(new THREE.BoxGeometry(1.2, top - bottom, 1.2), towerMaterial);
+    tower.position.set(x, (top + bottom) * 0.5, z);
     tower.castShadow = true;
     root.add(tower);
-    cablePoints.push(tower.position.clone().add(new THREE.Vector3(0, 10, 0)));
+    cablePoints.push(new THREE.Vector3(x, top, z));
   }
   if (cablePoints.length > 1) {
     root.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(cablePoints), cableMaterial));
   }
 }
 
-function createCanyonLandmark(root, theme, clearance) {
+function createCanyonLandmark(root, theme, clearance, terrain) {
   const material = new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.9, flatShading: true });
-  applyPbr(material, 'dark_rock', [2, 2]);
-  const arch = new THREE.Mesh(new THREE.TorusGeometry(30, 9, 10, 36, Math.PI), material);
-  arch.rotation.z = Math.PI;
-  arch.position.set(-58, 62, 70);
-  arch.scale.z = 0.64;
+  applyPbr(material, 'dark_rock', [2, 2], { colorMap: false });
+  const shape = new THREE.Shape();
+  shape.moveTo(-39, 0);
+  shape.lineTo(-39, 24);
+  shape.absarc(0, 24, 39, Math.PI, 0, true);
+  shape.lineTo(39, 0);
+  shape.lineTo(23, 0);
+  shape.lineTo(23, 24);
+  shape.absarc(0, 24, 23, 0, Math.PI, false);
+  shape.lineTo(-23, 0);
+  shape.closePath();
+  const archGeometry = new THREE.ExtrudeGeometry(shape, { depth: 12, bevelEnabled: true, bevelSize: 1.3, bevelThickness: 1, bevelSegments: 2, steps: 1, curveSegments: 18 });
+  archGeometry.translate(0, 0, -6);
+  const arch = new THREE.Mesh(archGeometry, material);
+  arch.position.set(-58, terrain.heightAt(-58, 70) - 2, 70);
+  arch.name = 'MesaStoneArch';
   arch.castShadow = true;
   // Hand-placed landmarks are validated too, so a future track edit that runs
   // the circuit past them fails the clearance test instead of the player.
-  if (clearance.clears(arch.position.x, arch.position.z, 39, TERRAIN_CLEARANCE)) root.add(arch);
+  if (clearance.clears(arch.position.x, arch.position.z, 42, TERRAIN_CLEARANCE)) root.add(arch);
 
   const monolith = new THREE.Mesh(new THREE.CylinderGeometry(12, 23, 118, 8, 4), material);
-  monolith.position.set(110, 48, -168);
+  monolith.position.set(110, terrain.heightAt(110, -168) + 57, -168);
   monolith.castShadow = true;
   monolith.receiveShadow = true;
   if (clearance.clears(monolith.position.x, monolith.position.z, 23, TERRAIN_CLEARANCE)) root.add(monolith);
 }
 
-function createCoastLandmark(root, theme, clearance) {
+function createCoastLandmark(root, theme, clearance, terrain) {
   const white = new THREE.MeshStandardMaterial({ color: 0xf1efe3, roughness: 0.72 });
   const red = new THREE.MeshStandardMaterial({ color: 0xc74343, roughness: 0.55 });
   const glass = new THREE.MeshStandardMaterial({ color: theme.accent, emissive: theme.accent, emissiveIntensity: 2.2, roughness: 0.18 });
@@ -1094,10 +1098,14 @@ function createCoastLandmark(root, theme, clearance) {
   const roof = new THREE.Mesh(new THREE.ConeGeometry(6, 4, 16), red);
   roof.position.y = 43.5;
   lighthouse.add(tower, stripe, lantern, roof);
-  lighthouse.position.set(-172, 34, -44);
+  lighthouse.position.set(-172, Math.max(2, terrain.heightAt(-172, -44)), -44);
+  const foundationHeight = lighthouse.position.y - terrain.heightAt(-172, -44) + 2;
+  const foundation = new THREE.Mesh(new THREE.CylinderGeometry(8, 10, foundationHeight, 18), new THREE.MeshStandardMaterial({ color: theme.rock, roughness: 0.95 }));
+  foundation.position.y = -foundationHeight * 0.5;
+  lighthouse.add(foundation);
   // Same validation as the other hand-placed landmarks: the lighthouse only
   // goes in if its footprint stays out of the driving corridor.
-  if (clearance.clears(lighthouse.position.x, lighthouse.position.z, 6.5, TERRAIN_CLEARANCE)) {
+  if (clearance.clears(lighthouse.position.x, lighthouse.position.z, 10, TERRAIN_CLEARANCE)) {
     root.add(lighthouse);
   }
 
@@ -1145,6 +1153,7 @@ export function createScenicWorld(scene, trackId, options = {}) {
   const qualityTier = options.qualityTier === 'balanced' ? 'balanced' : options.qualityTier === 'ultra' ? 'ultra' : 'high';
   const shortcuts = createShortcutMask(options.shortcutZones);
   const clearance = createClearanceField(curve, { shortcutZones: options.shortcutZones });
+  const terrain = createScenicTerrain(curve, { groundBase: theme.groundBase, shortcutZones: options.shortcutZones, qualityTier });
   const random = seededRandom(theme.seed);
   const world = new THREE.Group();
   world.name = theme.name;
@@ -1154,11 +1163,11 @@ export function createScenicWorld(scene, trackId, options = {}) {
 
   createSky(world, theme);
   addLights(world, theme, qualityTier);
-  const ground = createGround(world, theme, random, qualityTier, curve, clearance);
-  const road = createRoad(world, curve, theme, qualityTier, shortcuts);
-  createRockFormations(world, curve, theme, random, qualityTier, trackId, clearance);
-  createTracksideVegetation(world, curve, theme, random, qualityTier, trackId, clearance);
-  const environmentReady = createScenicEnvironmentHLOD(world, trackId, qualityTier, curve, clearance, options);
+  const ground = createGround(world, theme, random, qualityTier, curve, clearance, terrain, trackId);
+  const road = createRoad(world, curve, theme, qualityTier, shortcuts, terrain);
+  createRockFormations(world, curve, theme, random, qualityTier, trackId, clearance, terrain);
+  createTracksideVegetation(world, curve, theme, random, qualityTier, trackId, clearance, terrain);
+  const environmentReady = createScenicEnvironmentHLOD(world, trackId, qualityTier, curve, clearance, options, terrain);
   const startLine = createStartComplex(world, curve, theme);
   const clouds = createClouds(world, theme, random, qualityTier);
   let weather = null;
@@ -1169,19 +1178,20 @@ export function createScenicWorld(scene, trackId, options = {}) {
   if (trackId === 'alpine') {
     weather = createWeather(world, 'snow', random, qualityTier);
     aurora = createAurora(world);
-    createAlpineLandmark(world, curve, theme, clearance);
+    createAlpineLandmark(world, curve, theme, clearance, terrain);
   } else if (trackId === 'canyon') {
     weather = createWeather(world, 'dust', random, qualityTier);
-    createCanyonLandmark(world, theme, clearance);
+    createCanyonLandmark(world, theme, clearance, terrain);
   } else {
     ocean = createOcean(world);
-    coastLandmark = createCoastLandmark(world, theme, clearance);
+    coastLandmark = createCoastLandmark(world, theme, clearance, terrain);
   }
 
   return {
     world,
     road,
     ground,
+    terrain,
     startLine,
     districts: { scenic: world },
     animated: { clouds, weather, aurora, ocean },

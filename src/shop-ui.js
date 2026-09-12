@@ -195,6 +195,10 @@ export function createShopUi({ onChange, getWallet, setWallet } = {}) {
     });
   }
   ui.closeShop?.addEventListener('click', () => setVisible(false));
+  getWalletSync().subscribe(() => { if (ui.shopMenu && !ui.shopMenu.hidden) render(); });
+  getWalletSync().subscribeStatus((message) => {
+    if (message && ui.shopMenu && !ui.shopMenu.hidden) setStatus(message, 'warning');
+  });
 
   return {
     render,

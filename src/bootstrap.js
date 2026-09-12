@@ -369,9 +369,13 @@ function setAccountVisible(visible) {
   ui.accountMenu.hidden = !visible;
   if (!visible) return;
   renderAccount();
-  setAccountStatus();
+  setAccountStatus(walletSync.status);
   setTimeout(() => (accountUser ? ui.accountLogout : ui.accountUsername).focus(), 0);
 }
+
+walletSync.subscribeStatus((message) => {
+  if (!accountBusy) setAccountStatus(message, message ? 'warning' : '');
+});
 
 async function refreshAccount() {
   try {
@@ -421,8 +425,9 @@ async function signOutAccount() {
   setAccountStatus('正在退出…');
   try {
     // 先把待上传的钱包推完再注销会话，否则最后一次同步会 401。
-    await walletSync.signOut();
+    await walletSync.flush();
     await logoutAccount();
+    await walletSync.signOut({ flushPending: false });
     accountUser = null;
     renderAccount();
     signedOut = true;

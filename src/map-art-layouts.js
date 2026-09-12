@@ -116,7 +116,9 @@ export function buildMapArtPlacements(mapId, clearance, frameAt, options = {}) {
     if (!candidate) return [];
     return [{
       kind: entry.kind,
-      position: [candidate.x, point.y + entry.yOffset, candidate.z],
+      position: [candidate.x, options.groundHeightAt
+        ? options.groundHeightAt(candidate.x, candidate.z) - (entry.kind === 'mountainside' ? 5 : 0.4)
+        : point.y + entry.yOffset, candidate.z],
       rotation: [0, Math.atan2(-tangent.z, tangent.x) + entry.yaw, 0],
       scale: [...entry.scale],
       anchor: {
